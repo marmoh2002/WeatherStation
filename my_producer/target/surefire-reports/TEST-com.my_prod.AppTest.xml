@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="com.my_prod.AppTest" time="0.104" tests="1" errors="0" skipped="0" failures="0">
+  <properties>
+    <property name="java.specification.version" value="21"/>
+    <property name="sun.jnu.encoding" value="UTF-8"/>
+    <property name="java.class.path" value="/home/mariam/Documents/WeatherStation/my_producer/target/test-classes:/home/mariam/Documents/WeatherStation/my_producer/target/classes:/home/mariam/Documents/WeatherStation/shared_model/target/shared_model-1.0-SNAPSHOT.jar:/home/mariam/.m2/repository/org/apache/avro/avro/1.11.3/avro-1.11.3.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.15.2/jackson-core-2.15.2.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.15.2/jackson-databind-2.15.2.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.15.2/jackson-annotations-2.15.2.jar:/home/mariam/.m2/repository/org/apache/commons/commons-compress/1.22/commons-compress-1.22.jar:/home/mariam/.m2/repository/io/confluent/kafka-avro-serializer/7.5.0/kafka-avro-serializer-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-schema-serializer/7.5.0/kafka-schema-serializer-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-schema-registry-client/7.5.0/kafka-schema-registry-client-7.5.0.jar:/home/mariam/.m2/repository/org/yaml/snakeyaml/2.0/snakeyaml-2.0.jar:/home/mariam/.m2/repository/io/swagger/core/v3/swagger-annotations/2.1.10/swagger-annotations-2.1.10.jar:/home/mariam/.m2/repository/com/google/guava/guava/32.0.1-jre/guava-32.0.1-jre.jar:/home/mariam/.m2/repository/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar:/home/mariam/.m2/repository/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar:/home/mariam/.m2/repository/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar:/home/mariam/.m2/repository/org/checkerframework/checker-qual/3.33.0/checker-qual-3.33.0.jar:/home/mariam/.m2/repository/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0.jar:/home/mariam/.m2/repository/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8.jar:/home/mariam/.m2/repository/io/confluent/logredactor/1.0.12/logredactor-1.0.12.jar:/home/mariam/.m2/repository/com/google/re2j/re2j/1.6/re2j-1.6.jar:/home/mariam/.m2/repository/io/confluent/logredactor-metrics/1.0.12/logredactor-metrics-1.0.12.jar:/home/mariam/.m2/repository/com/eclipsesource/minimal-json/minimal-json/0.9.5/minimal-json-0.9.5.jar:/home/mariam/.m2/repository/io/confluent/common-utils/7.5.0/common-utils-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-streams-avro-serde/7.5.0/kafka-streams-avro-serde-7.5.0.jar:/home/mariam/.m2/repository/org/apache/kafka/kafka-clients/3.7.0/kafka-clients-3.7.0.jar:/home/mariam/.m2/repository/com/github/luben/zstd-jni/1.5.5-6/zstd-jni-1.5.5-6.jar:/home/mariam/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar:/home/mariam/.m2/repository/org/xerial/snappy/snappy-java/1.1.10.5/snappy-java-1.1.10.5.jar:/home/mariam/.m2/repository/org/slf4j/slf4j-api/2.0.13/slf4j-api-2.0.13.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-slf4j2-impl/2.23.1/log4j-slf4j2-impl-2.23.1.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-api/2.23.1/log4j-api-2.23.1.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-core/2.23.1/log4j-core-2.23.1.jar:/home/mariam/.m2/repository/junit/junit/4.13.2/junit-4.13.2.jar:/home/mariam/.m2/repository/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar:"/>
+    <property name="java.vm.vendor" value="Ubuntu"/>
+    <property name="sun.arch.data.model" value="64"/>
+    <property name="java.vendor.url" value="https://ubuntu.com/"/>
+    <property name="os.name" value="Linux"/>
+    <property name="java.vm.specification.version" value="21"/>
+    <property name="sun.java.launcher" value="SUN_STANDARD"/>
+    <property name="user.country" value="US"/>
+    <property name="sun.boot.library.path" value="/usr/lib/jvm/java-21-openjdk-amd64/lib"/>
+    <property name="sun.java.command" value="/home/mariam/Documents/WeatherStation/my_producer/target/surefire/surefirebooter-20260527234407142_6.jar /home/mariam/Documents/WeatherStation/my_producer/target/surefire 2026-05-27T23-44-04_489-jvmRun1 surefire-20260527234407142_4tmp surefire_1-20260527234407142_5tmp"/>
+    <property name="jdk.debug" value="release"/>
+    <property name="surefire.test.class.path" value="/home/mariam/Documents/WeatherStation/my_producer/target/test-classes:/home/mariam/Documents/WeatherStation/my_producer/target/classes:/home/mariam/Documents/WeatherStation/shared_model/target/shared_model-1.0-SNAPSHOT.jar:/home/mariam/.m2/repository/org/apache/avro/avro/1.11.3/avro-1.11.3.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-core/2.15.2/jackson-core-2.15.2.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-databind/2.15.2/jackson-databind-2.15.2.jar:/home/mariam/.m2/repository/com/fasterxml/jackson/core/jackson-annotations/2.15.2/jackson-annotations-2.15.2.jar:/home/mariam/.m2/repository/org/apache/commons/commons-compress/1.22/commons-compress-1.22.jar:/home/mariam/.m2/repository/io/confluent/kafka-avro-serializer/7.5.0/kafka-avro-serializer-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-schema-serializer/7.5.0/kafka-schema-serializer-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-schema-registry-client/7.5.0/kafka-schema-registry-client-7.5.0.jar:/home/mariam/.m2/repository/org/yaml/snakeyaml/2.0/snakeyaml-2.0.jar:/home/mariam/.m2/repository/io/swagger/core/v3/swagger-annotations/2.1.10/swagger-annotations-2.1.10.jar:/home/mariam/.m2/repository/com/google/guava/guava/32.0.1-jre/guava-32.0.1-jre.jar:/home/mariam/.m2/repository/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.jar:/home/mariam/.m2/repository/com/google/guava/listenablefuture/9999.0-empty-to-avoid-conflict-with-guava/listenablefuture-9999.0-empty-to-avoid-conflict-with-guava.jar:/home/mariam/.m2/repository/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.jar:/home/mariam/.m2/repository/org/checkerframework/checker-qual/3.33.0/checker-qual-3.33.0.jar:/home/mariam/.m2/repository/com/google/errorprone/error_prone_annotations/2.18.0/error_prone_annotations-2.18.0.jar:/home/mariam/.m2/repository/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8.jar:/home/mariam/.m2/repository/io/confluent/logredactor/1.0.12/logredactor-1.0.12.jar:/home/mariam/.m2/repository/com/google/re2j/re2j/1.6/re2j-1.6.jar:/home/mariam/.m2/repository/io/confluent/logredactor-metrics/1.0.12/logredactor-metrics-1.0.12.jar:/home/mariam/.m2/repository/com/eclipsesource/minimal-json/minimal-json/0.9.5/minimal-json-0.9.5.jar:/home/mariam/.m2/repository/io/confluent/common-utils/7.5.0/common-utils-7.5.0.jar:/home/mariam/.m2/repository/io/confluent/kafka-streams-avro-serde/7.5.0/kafka-streams-avro-serde-7.5.0.jar:/home/mariam/.m2/repository/org/apache/kafka/kafka-clients/3.7.0/kafka-clients-3.7.0.jar:/home/mariam/.m2/repository/com/github/luben/zstd-jni/1.5.5-6/zstd-jni-1.5.5-6.jar:/home/mariam/.m2/repository/org/lz4/lz4-java/1.8.0/lz4-java-1.8.0.jar:/home/mariam/.m2/repository/org/xerial/snappy/snappy-java/1.1.10.5/snappy-java-1.1.10.5.jar:/home/mariam/.m2/repository/org/slf4j/slf4j-api/2.0.13/slf4j-api-2.0.13.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-slf4j2-impl/2.23.1/log4j-slf4j2-impl-2.23.1.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-api/2.23.1/log4j-api-2.23.1.jar:/home/mariam/.m2/repository/org/apache/logging/log4j/log4j-core/2.23.1/log4j-core-2.23.1.jar:/home/mariam/.m2/repository/junit/junit/4.13.2/junit-4.13.2.jar:/home/mariam/.m2/repository/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar:"/>
+    <property name="sun.cpu.endian" value="little"/>
+    <property name="user.home" value="/home/mariam"/>
+    <property name="user.language" value="en"/>
+    <property name="java.specification.vendor" value="Oracle Corporation"/>
+    <property name="java.version.date" value="2026-01-20"/>
+    <property name="java.home" value="/usr/lib/jvm/java-21-openjdk-amd64"/>
+    <property name="file.separator" value="/"/>
+    <property name="basedir" value="/home/mariam/Documents/WeatherStation/my_producer"/>
+    <property name="java.vm.compressedOopsMode" value="Zero based"/>
+    <property name="line.separator" value="&#10;"/>
+    <property name="java.specification.name" value="Java Platform API Specification"/>
+    <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
+    <property name="surefire.real.class.path" value="/home/mariam/Documents/WeatherStation/my_producer/target/surefire/surefirebooter-20260527234407142_6.jar"/>
+    <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
+    <property name="java.runtime.version" value="21.0.10+7-Ubuntu-124.04"/>
+    <property name="user.name" value="mariam"/>
+    <property name="stdout.encoding" value="UTF-8"/>
+    <property name="path.separator" value=":"/>
+    <property name="os.version" value="6.17.0-14-generic"/>
+    <property name="java.runtime.name" value="OpenJDK Runtime Environment"/>
+    <property name="file.encoding" value="UTF-8"/>
+    <property name="java.vm.name" value="OpenJDK 64-Bit Server VM"/>
+    <property name="localRepository" value="/home/mariam/.m2/repository"/>
+    <property name="java.vendor.url.bug" value="https://bugs.launchpad.net/ubuntu/+source/openjdk-21"/>
+    <property name="java.io.tmpdir" value="/tmp"/>
+    <property name="java.version" value="21.0.10"/>
+    <property name="user.dir" value="/home/mariam/Documents/WeatherStation/my_producer"/>
+    <property name="os.arch" value="amd64"/>
+    <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
+    <property name="native.encoding" value="UTF-8"/>
+    <property name="java.library.path" value="/usr/java/packages/lib:/usr/lib/x86_64-linux-gnu/jni:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/usr/lib/jni:/lib:/usr/lib"/>
+    <property name="java.vm.info" value="mixed mode, sharing"/>
+    <property name="stderr.encoding" value="UTF-8"/>
+    <property name="java.vendor" value="Ubuntu"/>
+    <property name="java.vm.version" value="21.0.10+7-Ubuntu-124.04"/>
+    <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
+    <property name="java.class.version" value="65.0"/>
+  </properties>
+  <testcase name="shouldAnswerWithTrue" classname="com.my_prod.AppTest" time="0.007"/>
+</testsuite>

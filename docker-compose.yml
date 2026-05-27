@@ -1,0 +1,93 @@
+x-common-env: &common-env
+  KAFKA_BROKER: kafka:9092
+  SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+services:
+  # kafka
+  kafka:
+    image: apache/kafka:latest
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: kafka
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_BROKER_ID: 1
+      KAFKA_ALLOW_PLAINTEXT_LISTENER: true
+      KAFKA_TOPIC_AUTO_CREATE: true
+      KAFKA_DELETE_TOPIC_ENABLE: true
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CREATE_TOPICS: "weather-stations:1:1,rain-alerts:1:1"
+    networks:
+      - KafkaNetwork
+
+  # producer
+  producer:
+    build:
+      context: .
+      dockerfile: Dockerfile.producer.minimal
+    environment:
+      <<: *common-env
+      KAFKA_TOPIC: weather-stations
+      NUM_EVENTS: 100
+    depends_on:
+      schema-registry:
+        condition: service_healthy
+      kafka-setup:
+        condition: service_completed_successfully
+    networks:
+      - KafkaNetwork
+    restart: on-failure
+
+  stream:
+    build:
+      context: .
+      dockerfile: Dockerfile.stream.minimal
+    environment:
+      <<: *common-env
+      KAFKA_WARNING_INPUT_TOPIC: weather-stations
+      KAFKA_WARNING_OUTPUT_TOPIC: rain-alerts
+      KAFKA_HUMIDITY_THRESHOLD: 70
+    depends_on:
+      kafka-setup:
+        condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
+    networks:
+      - KafkaNetwork
+    restart: on-failure
+
+  kafka-setup:
+    image: apache/kafka:latest
+    depends_on:
+      - kafka
+    networks:
+      - KafkaNetwork
+    entrypoint: [ "bash", "-c", "until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list; do echo 'Waiting for Kafka...'; sleep 2; done && echo 'Kafka is ready'" ]
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    depends_on:
+      - kafka-setup
+    environment:
+      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+      - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092
+      - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8081/subjects" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8081:8081"
+    networks:
+      - KafkaNetwork
+    restart: on-failure
+
+networks:
+  KafkaNetwork:
+    driver: bridge

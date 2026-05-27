@@ -1,0 +1,15 @@
+docker compose down -v
+
+docker rmi weatherstation-producer:latest weatherstation-stream:latest
+
+mvn clean package
+
+docker compose build --no-cache
+
+docker compose up -d
+
+docker compose logs producer
+
+cd /tmp
+jar xf ~/Documents/WeatherStation/my_producer/target/my_producer-1.0-SNAPSHOT-jar-with-dependencies.jar log4j2.xml
+cat log4j2.xml
