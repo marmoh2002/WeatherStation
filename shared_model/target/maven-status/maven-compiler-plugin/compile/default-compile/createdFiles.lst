@@ -1,6 +1,0 @@
-com/shared_model/App.class
-com/weather/model/WeatherReading.class
-com/weather/model/StatusMessage$Builder.class
-com/weather/model/WeatherReading$Builder.class
-com/weather/config/AppConfigs.class
-com/weather/model/StatusMessage.class
