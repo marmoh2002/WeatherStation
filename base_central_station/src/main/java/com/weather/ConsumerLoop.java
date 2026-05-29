@@ -15,6 +15,7 @@ import com.weather.model.StatusMessage;
 public class ConsumerLoop implements Runnable {
     private static final Logger logger = LogManager.getLogger(ConsumerLoop.class);
     private final KafkaConsumer<Long, StatusMessage> consumer;
+    private final ParquetArchiver ParquetArchiver = new ParquetArchiver(AppConfigs.getParquetOutputBasePath());
 
     public ConsumerLoop(KafkaConsumer<Long, StatusMessage> consumer) {
         this.consumer = consumer;
@@ -31,6 +32,7 @@ public class ConsumerLoop implements Runnable {
                             + record.value().getWeather().getTemperature() + "°C, "
                             + record.value().getWeather().getHumidity() + "%" + " at "
                             + record.value().getStatusTimestamp());
+                    ParquetArchiver.add(record.value());
                 });
             }
 

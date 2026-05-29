@@ -11,7 +11,3 @@ docker compose up --scale producer=5 -d
 docker compose up -d
 
 docker compose logs producer
-
-cd /tmp
-jar xf ~/Documents/WeatherStation/my_producer/target/my_producer-1.0-SNAPSHOT-jar-with-dependencies.jar log4j2.xml
-cat log4j2.xml

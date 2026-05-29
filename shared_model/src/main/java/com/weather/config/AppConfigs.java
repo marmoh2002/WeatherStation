@@ -112,4 +112,14 @@ public class AppConfigs {
         return path;
     }
 
+    public static int getParquetFlushIntervalMins() {
+        String interval = System.getenv("PARQUET_FLUSH_INTERVAL_MINS");
+        try {
+            return interval != null ? Integer.parseInt(interval) : 60;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid PARQUET_FLUSH_INTERVAL_MINS value, using default: 60");
+            return 60;
+        }
+    }
+
 }

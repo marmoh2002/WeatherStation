@@ -6,6 +6,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import javax.security.auth.login.AppConfigurationEntry;
+
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.nio.file.Paths;
@@ -45,7 +48,8 @@ public class ParquetArchiver {
         this.hadoopConf = new Configuration();
 
         logger.info("Starting ParquetArchiver background thread for flushing stale partitions...");
-        scheduler.scheduleAtFixedRate(this::flushStalePartitions, 0, 30, TimeUnit.MINUTES);
+        scheduler.scheduleAtFixedRate(this::flushStalePartitions, 0, AppConfigs.getParquetFlushIntervalMins(),
+                TimeUnit.MINUTES);
     }
 
     // Called by poll loop — only public entry point
