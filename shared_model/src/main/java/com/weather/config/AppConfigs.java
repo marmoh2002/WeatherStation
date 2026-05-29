@@ -19,6 +19,14 @@ public class AppConfigs {
         return topic;
     }
 
+    public static String getProducerApplicationID() {
+        String appId = System.getenv("KAFKA_PRODUCER_APPLICATION_ID");
+        if (appId == null || appId.isEmpty()) {
+            return producerApplicationID;
+        }
+        return appId;
+    }
+
     // consumer
     public static final Boolean SPECIFIC_AVRO_READER = true;
 

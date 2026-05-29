@@ -6,6 +6,8 @@ mvn clean package
 
 docker compose build --no-cache
 
+docker compose up --scale producer=5 -d
+
 docker compose up -d
 
 docker compose logs producer
