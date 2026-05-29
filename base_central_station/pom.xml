@@ -57,6 +57,16 @@
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.parquet</groupId>
+            <artifactId>parquet-avro</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+        </dependency>
+
     </dependencies>
     <build>
         <pluginManagement>
@@ -109,6 +119,7 @@
                         <artifactId>log4j-transform-maven-shade-plugin-extensions</artifactId>
                         <version>0.2.0</version>
                     </dependency>
+
                 </dependencies>
             </plugin>
         </plugins>

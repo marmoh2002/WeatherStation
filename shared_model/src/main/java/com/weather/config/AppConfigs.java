@@ -92,4 +92,24 @@ public class AppConfigs {
         return topic;
     }
 
+    // Parquet Archiver
+
+    public static int getParquetBatchSize() {
+        String batchSize = System.getenv("PARQUET_BATCH_SIZE");
+        try {
+            return batchSize != null ? Integer.parseInt(batchSize) : 1000;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid PARQUET_BATCH_SIZE value, using default: 1000");
+            return 1000;
+        }
+    }
+
+    public static String getParquetOutputBasePath() {
+        String path = System.getenv("PARQUET_OUTPUT_BASE_PATH");
+        if (path == null || path.isEmpty()) {
+            return "/data/parquet_output";
+        }
+        return path;
+    }
+
 }
