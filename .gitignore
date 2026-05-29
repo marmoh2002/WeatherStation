@@ -1,0 +1,7 @@
+# Local scratch
+w.txt
+
+# Maven / Java build outputs
+**/target/
+*.class
+

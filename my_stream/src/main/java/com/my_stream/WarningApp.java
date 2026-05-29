@@ -12,13 +12,10 @@ import org.apache.logging.log4j.Logger;
 import java.util.Properties;
 
 import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
-import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import org.apache.kafka.common.serialization.Serdes;
 import com.weather.model.StatusMessage;
 
 import com.weather.config.AppConfigs;
-
-import java.util.Map;
 
 public class WarningApp {
 

@@ -12,9 +12,36 @@ public class AppConfigs {
     }
 
     public static String getTopicName() {
-        String topic = System.getenv("KAFKA_TOPIC");
+        String topic = System.getenv("KAFKA_PRODUCER_TOPIC");
         if (topic == null || topic.isEmpty()) {
             return producerTopicName;
+        }
+        return topic;
+    }
+
+    // consumer
+    public static final Boolean SPECIFIC_AVRO_READER = true;
+
+    public static final String KAFKA_CONSUMER_GROUP_ID = "base-station-group";
+    public static final String consumerTopicName = "WeatherStationTopic";
+
+    public static boolean isSpecificAvroReader() {
+        String specificReader = System.getenv("SPECIFIC_AVRO_READER");
+        return specificReader != null ? Boolean.parseBoolean(specificReader) : true;
+    }
+
+    public static String getConsumerGroupID() {
+        String groupId = System.getenv("KAFKA_CONSUMER_GROUP_ID");
+        if (groupId == null || groupId.isEmpty()) {
+            return "base-station-group";
+        }
+        return groupId;
+    }
+
+    public static String getConsumerTopicName() {
+        String topic = System.getenv("KAFKA_CONSUMER_TOPIC");
+        if (topic == null || topic.isEmpty()) {
+            return consumerTopicName;
         }
         return topic;
     }
@@ -44,7 +71,7 @@ public class AppConfigs {
     public static String getWarningInputTopic() {
         String topic = System.getenv("KAFKA_WARNING_INPUT_TOPIC");
         if (topic == null || topic.isEmpty()) {
-            return producerTopicName;
+            return consumerTopicName;
         }
         return topic;
     }

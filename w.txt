@@ -1,6 +1,6 @@
 docker compose down -v
 
-docker rmi weatherstation-producer:latest weatherstation-stream:latest
+docker rmi weatherstation-producer:latest weatherstation-stream:latest weatherstation-consumer:latest
 
 mvn clean package
 

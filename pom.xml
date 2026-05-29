@@ -13,6 +13,7 @@
         <module>shared_model</module>
         <module>my_producer</module>
         <module>my_stream</module>
+        <module>base_central_station</module>
     </modules>
 
     <properties>

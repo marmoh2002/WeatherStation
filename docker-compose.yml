@@ -33,8 +33,7 @@ services:
       dockerfile: Dockerfile.producer.minimal
     environment:
       <<: *common-env
-      KAFKA_TOPIC: weather-stations
-      NUM_EVENTS: 100
+      KAFKA_PRODUCER_TOPIC: weather-stations
     depends_on:
       schema-registry:
         condition: service_healthy
@@ -54,6 +53,8 @@ services:
       KAFKA_WARNING_OUTPUT_TOPIC: rain-alerts
       KAFKA_HUMIDITY_THRESHOLD: 70
     depends_on:
+      producer:
+        condition: service_started
       kafka-setup:
         condition: service_completed_successfully
       schema-registry:
@@ -84,6 +85,26 @@ services:
       retries: 5
     ports:
       - "8081:8081"
+    networks:
+      - KafkaNetwork
+    restart: on-failure
+
+  consumer:
+    build:
+      context: .
+      dockerfile: Dockerfile.consumer.minimal
+    environment:
+      <<: *common-env
+      KAFKA_CONSUMER_TOPIC: weather-stations
+    depends_on:
+      producer:
+        condition: service_started
+      stream:
+        condition: service_started
+      kafka-setup:
+        condition: service_completed_successfully
+      schema-registry:
+        condition: service_healthy
     networks:
       - KafkaNetwork
     restart: on-failure

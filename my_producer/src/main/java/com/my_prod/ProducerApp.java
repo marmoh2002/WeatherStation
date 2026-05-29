@@ -19,6 +19,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.confluent.kafka.serializers.KafkaAvroSerializerConfig;
 import com.weather.model.StatusMessage;
 import com.weather.model.WeatherReading;
 import com.weather.config.AppConfigs;
@@ -42,9 +43,7 @@ public class ProducerApp {
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, AppConfigs.getBootstrapServers());
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, LongSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class.getName());
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
-                KafkaAvroSerializer.class.getName());
-        props.put("schema.registry.url", AppConfigs.getSchemaRegistryUrl());
+        props.put(KafkaAvroSerializerConfig.SCHEMA_REGISTRY_URL_CONFIG, AppConfigs.getSchemaRegistryUrl());
         KafkaProducer<Long, StatusMessage> producer = new KafkaProducer<Long, StatusMessage>(props);
         logger.info("Start sending messages...");
 
