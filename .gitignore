@@ -5,3 +5,7 @@ w.txt
 **/target/
 *.class
 
+# Docker files
+Dockerfile.consumer.minimal
+Dockerfile.producer.minimal
+Dockerfile.stream.minimal
