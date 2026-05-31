@@ -143,4 +143,11 @@ public class SegmentFile implements Closeable {
         closeReader();
     }
 
+    public record EntryHeader(long key, int valueSize, long offset) {
+    }
+
+    public DataInputStream openForSequentialRead() throws IOException {
+        return new DataInputStream(
+                new BufferedInputStream(new FileInputStream(filePath.toFile())));
+    }
 }

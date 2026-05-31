@@ -98,11 +98,11 @@ services:
       PARQUET_OUTPUT_BASE_PATH: /app/parquet_output
       PARQUET_BATCH_SIZE: 5
       PARQUET_FLUSH_INTERVAL_MINS: 1
-      MAX_SEGMENT_SIZE_KB: 66000
-      DISK_FLUSH_THRESHOLD: 1000000
+      MAX_SEGMENT_SIZE_KB: 1000
+      DISK_FLUSH_THRESHOLD: 10000
       HINT_FLUSH_THRESHOLD: 5
       BITCASK_STORE_DIRECTORY: /app/bitcask_data
-      COMPACTION_INTERVAL_MINS: 5
+      COMPACTION_INTERVAL_MINS: 1
     depends_on:
       producer:
         condition: service_started
@@ -119,6 +119,25 @@ services:
       - bitcask-shared-storage:${BITCASK_STORE_DIRECTORY}
     restart: on-failure
 
+  # ---------------------------------------------------------
+  # 4. BITCASK CLIENT (Utility Container)
+  # ---------------------------------------------------------
+  client:
+    build:
+      context: .
+      dockerfile: DockerFile.bitcaskClient
+    # depends_on:
+    #   - consumer
+    environment:
+      # We tell the client to talk to the consumer container
+      - API_URL=http://consumer:8080
+    volumes:
+      - ./client_output:/client/output
+      # - ./bitcask_client.sh:/client/bitcask_client.sh
+    working_dir: /client/output
+    networks:
+      - KafkaNetwork
+
 networks:
   KafkaNetwork:
     driver: bridge
@@ -126,3 +145,4 @@ networks:
 volumes:
   parquet-shared-storage:
   bitcask-shared-storage:
+  csv-shared-storage:

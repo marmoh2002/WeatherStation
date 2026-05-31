@@ -1,0 +1,17 @@
+# Use a lightweight Linux distribution
+FROM alpine:latest
+
+# Install bash and curl (Alpine doesn't come with bash by default)
+RUN apk add --no-cache bash curl
+
+# Set the working directory inside the container
+WORKDIR /client
+
+# Copy your script into the container
+COPY bitcask_client.sh .
+
+# Make sure it is executable
+RUN chmod +x bitcask_client.sh
+
+# We don't set an ENTRYPOINT because we want to pass different 
+# arguments (-view-all, -n=100) on the fly when we run it.

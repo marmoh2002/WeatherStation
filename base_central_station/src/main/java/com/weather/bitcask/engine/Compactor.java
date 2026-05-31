@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -57,88 +59,124 @@ public class Compactor {
 
     private void compact() {
         logger.info("Starting compaction process...");
+
+        List<SegmentFile> segmentsToCompact = new ArrayList<>(store.getClosedSegments());
+        if (segmentsToCompact.size() < 2) {
+            logger.info("Not enough segments to compact. Skipping.");
+            return;
+        }
+        // Sort segments by ID (oldest first)
+        segmentsToCompact.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
+        // Create new segment file for compacted data
+        SegmentFile newSegment = null;
+
+        Set<Long> oldIds = segmentsToCompact.stream()
+                .map(SegmentFile::getSegmentId)
+                .collect(Collectors.toSet());
+
+        Map<Long, Long> writtenOffsets = new HashMap<>();
+
+        Map<Long, Integer> writtenValueSizes = new HashMap<>();
+
         try {
-            List<SegmentFile> segmentsToCompact = new ArrayList<>(store.getClosedSegments());
-            if (segmentsToCompact.size() < 2) {
-                logger.info("Not enough segments to compact. Skipping.");
-                return;
-            }
-            // Sort segments by ID (oldest first)
-            segmentsToCompact.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
-            // Create new segment file for compacted data
-            SegmentFile newSegment;
-            Map<Long, DataEntry> latestEntries = new HashMap<>();
-            Map<Long, Long> writtenOffsets = new HashMap<>();
-            try {
-                newSegment = new SegmentFile(store.segmentPath(Instant.now().toEpochMilli()), true);
-                // Read all entries from segments to compact and keep only the latest for each
-                // key
-                for (SegmentFile segment : segmentsToCompact) {
-                    Map<Long, DataEntry> entries = segment.readAllEntries();
-                    segment.closeReader();
-                    for (long offset : entries.keySet()) {
-                        DataEntry entry = entries.get(offset);
-                        DirEntry dirEntryMem = store.getInMemoryIndex().get(entry.getKey());
-                        if (dirEntryMem == null) {
-                            continue; // key was deleted after this entry was written
-                        }
-                        Long entrySegmentId = segment.getSegmentId();
-                        if (dirEntryMem.getSegmentId().equals(entrySegmentId)
-                                && Long.valueOf(dirEntryMem.getOffset()).equals(Long.valueOf(offset))) {
-                            latestEntries.put(entry.getKey(), entry);
-                        }
-                    }
-                }
-                // Write latest entries to new segment file
-                for (DataEntry entry : latestEntries.values()) {
-                    try {
-                        long writtenOffset = newSegment.appendEntry(entry);
-                        writtenOffsets.put(entry.getKey(), writtenOffset);
+            newSegment = new SegmentFile(store.segmentPath(Instant.now().toEpochMilli()), true);
+            // Read all entries from segments to compact and keep only the latest for each
+            // key
+            for (SegmentFile segment : segmentsToCompact) {
+                long segmentId = segment.getSegmentId();
 
-                    } catch (IOException e) {
-                        logger.error("Failed to write entry with key {} to new segment: {}", entry.getKey(),
-                                e.getMessage(), e);
+                try (DataInputStream in = segment.openForSequentialRead()) {
+                    long offset = 0;
+
+                    while (true) {
+                        long key;
+                        int valueSize;
+                        try {
+                            key = in.readLong();
+                            valueSize = in.readInt();
+                        } catch (EOFException e) {
+                            break; // clean end of segment
+                        }
+                        long recordOffset = offset;
+                        offset += Long.BYTES + Integer.BYTES + valueSize;
+
+                        // Is this record the current live version?
+                        DirEntry live = store.getInMemoryIndex().get(key);
+                        boolean isLive = live != null
+                                && live.getSegmentId().equals(segmentId)
+                                && live.getOffset() == recordOffset;
+
+                        if (!isLive) {
+                            // Skip: read past the value bytes without allocating
+                            long remaining = valueSize;
+                            while (remaining > 0) {
+                                long skipped = in.skip(remaining);
+                                if (skipped <= 0)
+                                    throw new EOFException("Unexpected end during skip");
+                                remaining -= skipped;
+                            }
+                            continue;
+                        }
+
+                        // Live record: read value and immediately stream to new segment
+                        byte[] value = new byte[valueSize];
+                        in.readFully(value);
+
+                        long newOffset = newSegment.appendEntry(new DataEntry(key, value));
+                        writtenOffsets.put(key, newOffset);
+                        writtenValueSizes.put(key, valueSize);
                     }
+
+                } catch (IOException e) {
+                    logger.error("Error streaming segment {} during compaction", segmentId, e);
+                    return; // abort; old segments untouched
                 }
-            } catch (Exception e) {
-                logger.error("Failed to create new segment for compaction: {}", e.getMessage(), e);
-                return;
             }
+            // Write hint file for the new compacted segment
             try (HintFile hintFile = new HintFile(store.hintPath(newSegment.getSegmentId()))) {
-                for (long e : latestEntries.keySet()) {
-                    // the offset returned by appendEntry for this entry
+                for (long key : writtenOffsets.keySet()) {
                     hintFile.appendHint(new HintEntry(
-                            latestEntries.get(e).getKey(),
+                            key,
                             newSegment.getSegmentId(),
-                            writtenOffsets.get(e),
-                            latestEntries.get(e).getValue().length));
-
+                            writtenOffsets.get(key),
+                            writtenValueSizes.get(key)));
                 }
             }
-            // Update store with new segment and remove old segments
+            // Atomically update index and swap segments
             Map<Long, SegmentFile> newSegments = new HashMap<>();
             newSegments.put(newSegment.getSegmentId(), newSegment);
-            Set<Long> oldIds = segmentsToCompact.stream()
-                    .map(SegmentFile::getSegmentId)
-                    .collect(Collectors.toSet());
 
-            for (long k : latestEntries.keySet()) {
-                DirEntry newDirEntry = new DirEntry(newSegment.getSegmentId(), writtenOffsets.get(k),
-                        latestEntries.get(k).getValue().length);
-                store.updateIndexIfNewer(k, newDirEntry, oldIds);
+            for (long key : writtenOffsets.keySet()) {
+                DirEntry newEntry = new DirEntry(
+                        newSegment.getSegmentId(),
+                        writtenOffsets.get(key),
+                        writtenValueSizes.get(key));
+                store.updateIndexIfNewer(key, newEntry, oldIds);
             }
+
             store.replaceSegments(oldIds, newSegments);
-            // newSegment.closeWriter();
+
             for (Long oldId : oldIds) {
                 Files.deleteIfExists(store.segmentPath(oldId));
                 Files.deleteIfExists(store.hintPath(oldId));
             }
-            logger.info("Compaction completed. Created new segment {}, removed segments {}",
+            logger.info("closed new segment file after compaction: {}", newSegment.getSegmentId());
+
+            logger.info("Compaction done. New segment: {}, removed: {}",
                     newSegment.getSegmentId(), oldIds);
 
         } catch (Throwable t) {
-            logger.error("Unexpected error during compaction: {}", t.getMessage(), t);
+            logger.error("Unexpected error during compaction", t);
+        } finally {
+            if (newSegment != null) {
+                try {
+                    newSegment.close();
+                } catch (IOException e) {
+                    logger.error("Error closing new segment during compaction cleanup", e);
+                }
+            }
         }
+
     }
 
 }

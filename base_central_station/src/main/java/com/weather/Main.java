@@ -8,10 +8,12 @@ import com.weather.model.WeatherReading;
 import com.weather.archive.engine.ParquetArchiver;
 import com.weather.bitcask.engine.BitCaskStore;
 import com.weather.bitcask.engine.Compactor;
+import com.weather.bitcask.server.BitCaskServer;
 import com.weather.config.AppConfigs;
 import com.weather.consumer.BaseStationConsumer;
 import com.weather.consumer.ConsumerLoop;
 import com.weather.pipeline.Pipeline;
+
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -45,10 +47,13 @@ public class Main {
 
         // 3. Compactor
         Compactor compactor = new Compactor(store);
-
         compactor.start();
 
-        // 4. Start consumer — pass pipeline in so poll loop calls pipeline.process()
+        // 4. API Server
+        BitCaskServer apiServer = new BitCaskServer(store, 8080);
+        apiServer.start();
+
+        // 5. Start consumer — pass pipeline in so poll loop calls pipeline.process()
         KafkaConsumer<Long, StatusMessage> consumer = BaseStationConsumer.createConsumer();
         ConsumerLoop consumerLoop = new ConsumerLoop(consumer, pipeline);
 
@@ -66,10 +71,13 @@ public class Main {
             // Step 2 — stop compactor
             compactor.stop();
 
-            // Step 3 — flush remaining parquet buffers
+            // Step 3 — stop the API server to release port 8080
+            apiServer.stop();
+
+            // Step 4 — flush remaining parquet buffers
             archiver.close();
 
-            // Step 4 — close segment files
+            // Step 5 — close segment files
             try {
                 store.close();
             } catch (Exception e) {

@@ -29,6 +29,7 @@
         <jackson.version>2.15.2</jackson.version>
         <parquet.version>1.13.1</parquet.version>
         <hadoop.version>3.3.6</hadoop.version>
+        <http.version>20070405</http.version>
     </properties>
 
     <dependencyManagement>
@@ -227,6 +228,12 @@
                 <groupId>org.apache.hadoop</groupId>
                 <artifactId>hadoop-mapreduce-client-core</artifactId>
                 <version>${hadoop.version}</version>
+            </dependency>
+            <!-- add http server dependency -->
+            <dependency>
+                <groupId>com.sun.net.httpserver</groupId>
+                <artifactId>http</artifactId>
+                <version>${http.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

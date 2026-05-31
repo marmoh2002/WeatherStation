@@ -265,7 +265,7 @@ public class BitCaskStore implements Closeable {
         segmentFilesById.putAll(newSegments);
     }
 
-    ConcurrentHashMap<Long, DirEntry> getInMemoryIndex() {
+    public ConcurrentHashMap<Long, DirEntry> getInMemoryIndex() {
         return inMemoryIndex;
     }
 
