@@ -1,4 +1,4 @@
-package com.my_stream;
+package com.weather.my_stream;
 
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;

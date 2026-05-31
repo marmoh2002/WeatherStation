@@ -1,4 +1,4 @@
-package com.my_prod;
+package com.weather.my_prod;
 
 import org.apache.kafka.clients.producer.KafkaProducer;
 

@@ -1,4 +1,4 @@
-package com.my_prod;
+package com.weather.my_prod;
 
 import java.time.Instant;
 import java.util.Random;

@@ -2,8 +2,6 @@ package com.weather.bitcask.engine;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.apache.parquet.filter2.predicate.Operators.In;
-
 import com.weather.bitcask.model.DataEntry;
 import com.weather.bitcask.model.DirEntry;
 import com.weather.bitcask.model.HintEntry;
@@ -22,14 +20,15 @@ import java.util.Set;
 import java.io.Closeable;
 
 public class BitCaskStore implements Closeable {
-    private final ConcurrentHashMap<Long, DirEntry> inMemoryIndex = new ConcurrentHashMap<>(); // station_id ->
-                                                                                               // DataEntry
-    private final ConcurrentHashMap<Integer, SegmentFile> segmentFilesById = new ConcurrentHashMap<>();
     private SegmentFile activeSegment;
+    private HintFile activeHintFile;
     private final AtomicInteger nextSegmentId = new AtomicInteger(0);
     private final Path storeDirectory;
-
     private final Logger logger = LogManager.getLogger(BitCaskStore.class);
+    private final ConcurrentHashMap<Integer, SegmentFile> segmentFilesById = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, DirEntry> inMemoryIndex = new ConcurrentHashMap<>(); // stationId →
+                                                                                               // (segmentId, offset,
+                                                                                               // valueSize)
 
     public BitCaskStore(String dir) throws Exception {
         storeDirectory = Path.of(dir);
@@ -88,7 +87,31 @@ public class BitCaskStore implements Closeable {
         }
         if (activeSegment.isFull()) {
             try {
+                int sealedSegmentId = activeSegment.getSegmentId();
                 activeSegment.close();
+                logger.info("Sealed segment file: {}", activeSegment);
+                try {
+                    activeHintFile = new HintFile(hintPath(sealedSegmentId));
+                    logger.info("Created hint file for sealed segment {}: {}", activeSegment, activeHintFile);
+                } catch (Exception e) {
+                    logger.error("Failed to create hint file for sealed segment {}: ", activeSegment, e);
+                }
+                try {
+                    for (Map.Entry<Long, DirEntry> indexEntry : inMemoryIndex.entrySet()) {
+                        if (indexEntry.getValue().getSegmentId() == activeSegment.getSegmentId()) {
+                            HintEntry hint = new HintEntry(indexEntry.getKey(), activeSegment.getSegmentId(),
+                                    indexEntry.getValue().getOffset(), indexEntry.getValue().getValueSize());
+                            activeHintFile.appendHint(hint);
+                            logger.debug("Appended hint for stationId {} to hint file of segment {}: {}",
+                                    indexEntry.getKey(),
+                                    activeSegment, hint);
+                        }
+                    }
+                    activeHintFile.close();
+                    logger.info("Finished writing hint file for sealed segment {}: {}", activeSegment, activeHintFile);
+                } catch (Exception e) {
+                    logger.error("Failed to write hint file for sealed segment {}: ", activeSegment, e);
+                }
                 activeSegment = new SegmentFile(segmentPath(nextSegmentId.getAndIncrement()), true);
                 segmentFilesById.put(activeSegment.getSegmentId(), activeSegment);
                 logger.info("Created new segment file: {}", activeSegment);
@@ -149,17 +172,25 @@ public class BitCaskStore implements Closeable {
     }
 
     private void recoverFromHintFiles() throws IOException {
-        Files.list(storeDirectory).filter(p -> p.toString().endsWith(".hint")).sorted().forEach(hintPath -> {
+        List<Path> hintFiles = Files.list(storeDirectory).filter(p -> p.toString().endsWith(".hint")).sorted()
+                .collect(Collectors.toList());
+        for (Path hintPath : hintFiles) {
             try {
                 List<HintEntry> entries = HintFile.readAll(hintPath);
                 for (HintEntry he : entries) {
-                    inMemoryIndex.put(he.getKey(), new DirEntry(he.getSegmentId(), he.getOffset(), he.getValueSize()));
+                    inMemoryIndex.put(he.getKey(),
+                            new DirEntry(he.getSegmentId(), he.getOffset(), he.getValueSize()));
+                    logger.info(
+                            "Recovered hint entry for key {} from hint file {}: segmentId {}, offset {}, valueSize {}",
+                            he.getKey(), hintPath, he.getSegmentId(), he.getOffset(), he.getValueSize());
                 }
+                logger.info("Recovered {} entries from hint file {}", entries.size(), hintPath);
             } catch (IOException e) {
                 logger.error("Failed to read hint file {}", hintPath, e);
             }
 
-        });
+        }
+
     }
 
     private void reopenSegmentFiles() throws Exception {
@@ -229,20 +260,40 @@ public class BitCaskStore implements Closeable {
 
     @Override
     public void close() {
+        // write hint file before closing
         try {
-            if (activeSegment != null) {
-                activeSegment.close();
+            int id = activeSegment.getSegmentId();
+            activeHintFile = new HintFile(hintPath(id));
+            for (Map.Entry<Long, DirEntry> e : inMemoryIndex.entrySet()) {
+                if (e.getValue().getSegmentId() == id) {
+                    activeHintFile.appendHint(new HintEntry(
+                            e.getKey(),
+                            e.getValue().getSegmentId(),
+                            e.getValue().getOffset(),
+                            e.getValue().getValueSize()));
+                }
             }
+            activeHintFile.close();
+            logger.info("Wrote hint file for active segment {} on close", id);
+        } catch (Exception e) {
+            logger.error("Failed to write hint file on close", e);
+        }
+        try {
+            activeSegment.close();
+
         } catch (IOException e) {
             logger.error("Error closing active segment: ", e);
         }
-        try {
-            for (SegmentFile segment : segmentFilesById.values()) {
-                segment.close();
-            }
-        } catch (IOException e) {
-            logger.error("Error closing segment files: ", e);
-        }
 
+        for (SegmentFile segment : segmentFilesById.values()) {
+            try {
+                if (segment != activeSegment)
+                    segment.close();
+                logger.info("Closed segment file {}", segment.getSegmentId());
+            } catch (IOException e) {
+                logger.error("Error closing segment {}: ", segment.getSegmentId(), e);
+            }
+        }
     }
+
 }

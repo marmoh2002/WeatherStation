@@ -26,17 +26,17 @@ public class HintFile implements Closeable {
     private long offset = 0;
     private int hintsSinceFlush = 0;
 
-    public HintFile(Path filePath) throws Exception {
+    public HintFile(Path filePath) throws IOException {
         logger.info("Creating HintFile at path: {}", filePath);
         try {
             this.writer = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(filePath.toFile(), true))); // append
         } catch (Exception e) {
             logger.error("Error occurred while creating HintFile", e);
-            throw new Exception("Failed to create HintFile", e);
+            throw new IOException("Failed to create HintFile", e);
         }
     }
 
-    public long appendHint(HintEntry hint) throws Exception {
+    public long appendHint(HintEntry hint) throws IOException {
         try {
             writer.writeLong(hint.getKey());
             writer.writeInt(hint.getSegmentId());
@@ -51,7 +51,7 @@ public class HintFile implements Closeable {
             logger.debug("Appended hint for key {} to HintFile at offset {}", hint.getKey(), hint.getOffset());
         } catch (Exception e) {
             logger.error("Error occurred while appending hint to HintFile", e);
-            throw new Exception("Failed to append hint to HintFile", e);
+            throw new IOException("Failed to append hint to HintFile", e);
         }
         return offset;
     }
