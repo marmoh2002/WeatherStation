@@ -1,4 +1,4 @@
-package com.weather;
+package com.weather.archive.engine;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -7,14 +7,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import javax.security.auth.login.AppConfigurationEntry;
-
 import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.nio.file.Files;
 import java.io.IOException;
+
+import com.weather.archive.model.TimeBucketExtractor;
+import com.weather.archive.model.PartitionKey;
 import com.weather.config.AppConfigs;
 import com.weather.model.StatusMessage;
 
@@ -50,6 +51,7 @@ public class ParquetArchiver {
         logger.info("Starting ParquetArchiver background thread for flushing stale partitions...");
         scheduler.scheduleAtFixedRate(this::flushStalePartitions, 0, AppConfigs.getParquetFlushIntervalMins(),
                 TimeUnit.MINUTES);
+
     }
 
     // Called by poll loop — only public entry point
@@ -58,14 +60,19 @@ public class ParquetArchiver {
             logger.warn("Archiver is closed, dropping record.");
             return;
         }
+
         PartitionKey key = new PartitionKey(record);
+        logger.info("Processing record for partition: {}", key.getPathString());
         AtomicReference<List<StatusMessage>> batchToFlushRef = new AtomicReference<>();
         buffers.compute(key, (k, batch) -> {
             if (batch == null) {
                 batch = new ArrayList<>();
             }
             batch.add(record);
+            logger.debug("Batch size now: {}/{}", batch.size(), BATCH_SIZE);
+
             if (batch.size() >= BATCH_SIZE) {
+                logger.info("Batch full! Flushing partition: {}", key.getPathString());
                 batchToFlushRef.set(batch);
                 return null; // removes the batch with key k from the map
             }
@@ -82,9 +89,14 @@ public class ParquetArchiver {
         // iterate over buffers
         // extract each key
         try {
-            String currentHourBucket = HourBucketExtractor.getHourBucketFromSeconds(Instant.now().getEpochSecond());
+            logger.info("STALE_FLUSH: Checking for stale partitions...");
+            String currentHourBucket = TimeBucketExtractor.getTimeBucketFromSeconds(Instant.now().getEpochSecond())
+                    .toString();
+            logger.info("STALE_FLUSH: Current hour bucket: {}", currentHourBucket);
+            logger.info("STALE_FLUSH: Total partitions in buffer: {}", buffers.size());
+
             buffers.forEach((key, batch) -> {
-                if (!key.getHourBucket().equals(currentHourBucket)) {
+                if (!key.getCurrentHourBucket().equals(currentHourBucket)) {
                     AtomicReference<List<StatusMessage>> staleBatchRef = new AtomicReference<>();
                     buffers.computeIfPresent(key, (k, currBatch) -> {
                         staleBatchRef.set(currBatch);
@@ -92,7 +104,10 @@ public class ParquetArchiver {
                     });
                     // Flush happens OUTSIDE the map lock so we don't block other threads
                     if (staleBatchRef.get() != null && !staleBatchRef.get().isEmpty()) {
+                        logger.warn("STALE_FLUSH: Flushing {} records from stale partition: {}",
+                                staleBatchRef.get().size(), key.getPathString());
                         flush(key, staleBatchRef.get());
+
                     }
                 }
 
@@ -109,10 +124,13 @@ public class ParquetArchiver {
         // (timestamp can be current time or max timestamp in batch)
         try {
             java.nio.file.Path localDirPath = Paths.get(baseOutputPath, key.getPathString());
+            logger.info("Creating directories: {}", localDirPath);
             Files.createDirectories(localDirPath);
             int seq = fileSequence.incrementAndGet() % 1000;
-            String fileName = "data_" + key.getStationId() + "_" + key.getHourBucket() + "_" + seq + ".parquet";
+            String fileName = "data_" + key.getStationId() + "_" + key.getCurrentHourBucket() + "_"
+                    + Instant.now().toEpochMilli() + ".parquet";
             Path parquetFilePath = new Path(localDirPath.toString(), fileName);
+            logger.info("Writing parquet file: {}", parquetFilePath);
             // try-with-resources statement. No need to explicitly close the writer after
             // curly braces execute.
             try (ParquetWriter<StatusMessage> writer = AvroParquetWriter.<StatusMessage>builder(
@@ -124,7 +142,7 @@ public class ParquetArchiver {
                 for (StatusMessage record : batch) {
                     writer.write(record);
                 }
-                logger.debug("Successfully flushed {} records to {}", batch.size(), parquetFilePath);
+                logger.info("Successfully flushed {} records to {}", batch.size(), parquetFilePath);
             }
         } catch (IOException e) { // catch all to prevent background thread from dying. We log the error and move
                                   // on, but in a real system we might want to implement retries or alerting here.

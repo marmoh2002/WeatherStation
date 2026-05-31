@@ -122,4 +122,52 @@ public class AppConfigs {
         }
     }
 
+    public static int getDiskFlushThreshold() {
+        String threshold = System.getenv("DISK_FLUSH_THRESHOLD");
+        try {
+            return threshold != null ? Integer.parseInt(threshold) : 1000;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid DISK_FLUSH_THRESHOLD value, using default: 1000");
+            return 1000;
+        }
+    }
+
+    public static long getMaxSegmentSize() {
+        String maxSize = System.getenv("MAX_SEGMENT_SIZE_KB");
+        try {
+            return maxSize != null ? Long.parseLong(maxSize) : 10 * 1024; // default to 10KB
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid MAX_SEGMENT_SIZE value, using default: 10KB");
+            return 10 * 1024;
+        }
+    }
+
+    public static int getHintFlushThreshold() {
+        String threshold = System.getenv("HINT_FLUSH_THRESHOLD");
+        try {
+            return threshold != null ? Integer.parseInt(threshold) : 100; // default to flush after every 100 hints
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid HINT_FLUSH_THRESHOLD value, using default: 100");
+            return 100;
+        }
+    }
+
+    public static int getCompactionFlushThreshold() {
+        String threshold = System.getenv("COMPACTION_FLUSH_THRESHOLD");
+        try {
+            return threshold != null ? Integer.parseInt(threshold) : 1000; // default to compact after every 1000 writes
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid COMPACTION_FLUSH_THRESHOLD value, using default: 1000");
+            return 1000;
+        }
+    }
+
+    public static String getStoreDirectory() {
+        String dir = System.getenv("BITCASK_STORE_DIRECTORY");
+        if (dir == null || dir.isEmpty()) {
+            return "bitcask_data";
+        }
+        return dir;
+    }
+
 }

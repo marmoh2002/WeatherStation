@@ -1,4 +1,4 @@
-package com.weather;
+package com.weather.consumer;
 
 import java.util.List;
 
@@ -9,16 +9,19 @@ import org.apache.kafka.common.errors.WakeupException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import com.weather.archive.engine.ParquetArchiver;
 import com.weather.config.AppConfigs;
 import com.weather.model.StatusMessage;
+import com.weather.pipeline.Pipeline;
 
 public class ConsumerLoop implements Runnable {
     private static final Logger logger = LogManager.getLogger(ConsumerLoop.class);
     private final KafkaConsumer<Long, StatusMessage> consumer;
-    private final ParquetArchiver ParquetArchiver = new ParquetArchiver(AppConfigs.getParquetOutputBasePath());
+    private final Pipeline pipeline;
 
-    public ConsumerLoop(KafkaConsumer<Long, StatusMessage> consumer) {
+    public ConsumerLoop(KafkaConsumer<Long, StatusMessage> consumer, Pipeline pipeline) {
         this.consumer = consumer;
+        this.pipeline = pipeline;
     }
 
     @Override
@@ -28,11 +31,11 @@ public class ConsumerLoop implements Runnable {
             while (true) {
                 ConsumerRecords<Long, StatusMessage> records = consumer.poll(java.time.Duration.ofMillis(1000));
                 records.forEach(record -> {
-                    logger.info("Received message: " + record.value().getStationId() + " - "
+                    logger.debug("Received message: " + record.value().getStationId() + " - "
                             + record.value().getWeather().getTemperature() + "°C, "
                             + record.value().getWeather().getHumidity() + "%" + " at "
                             + record.value().getStatusTimestamp());
-                    ParquetArchiver.add(record.value());
+                    pipeline.process(record.value());
                 });
             }
 

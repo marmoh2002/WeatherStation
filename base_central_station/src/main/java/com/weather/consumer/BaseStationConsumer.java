@@ -1,4 +1,4 @@
-package com.weather;
+package com.weather.consumer;
 
 import java.util.Properties;
 
