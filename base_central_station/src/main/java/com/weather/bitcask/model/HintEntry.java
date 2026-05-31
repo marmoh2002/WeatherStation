@@ -2,11 +2,11 @@ package com.weather.bitcask.model;
 
 public class HintEntry {
     private final long key;
-    private final int segmentId;
+    private final long segmentId;
     private final int valueSize;
     private final long offset;
 
-    public HintEntry(Long key, int segmentId, long offset, int valueSize) {
+    public HintEntry(Long key, long segmentId, long offset, int valueSize) {
         this.key = key;
         this.segmentId = segmentId;
         this.offset = offset;
@@ -17,7 +17,7 @@ public class HintEntry {
         return key;
     }
 
-    public int getSegmentId() {
+    public long getSegmentId() {
         return segmentId;
     }
 

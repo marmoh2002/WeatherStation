@@ -6,15 +6,12 @@ import com.weather.bitcask.model.HintEntry;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
-import java.nio.file.Path;
 import java.io.IOException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
+import java.time.Instant;
 import com.weather.bitcask.model.DataEntry;
 
 import java.nio.file.Files;
@@ -23,6 +20,7 @@ import java.util.Comparator;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import com.weather.config.AppConfigs;
 
 public class Compactor {
     private final BitCaskStore store;
@@ -38,7 +36,7 @@ public class Compactor {
     public void start() {
         try {
             logger.info("Starting compactor...");
-            scheduler.scheduleAtFixedRate(this::compact, 1, 1, TimeUnit.MINUTES);
+            scheduler.scheduleAtFixedRate(this::compact, 1, AppConfigs.getCompactionInterval(), TimeUnit.MINUTES);
         } catch (Exception e) {
             logger.error("Failed to start compactor: {}", e.getMessage(), e);
         }
@@ -66,26 +64,29 @@ public class Compactor {
                 return;
             }
             // Sort segments by ID (oldest first)
-            segmentsToCompact.sort(Comparator.comparingInt(SegmentFile::getSegmentId));
+            segmentsToCompact.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
             // Create new segment file for compacted data
             SegmentFile newSegment;
             Map<Long, DataEntry> latestEntries = new HashMap<>();
             Map<Long, Long> writtenOffsets = new HashMap<>();
             try {
-                newSegment = new SegmentFile(store.segmentPath(store.getAndIncrementNextSegmentId()), true);
+                newSegment = new SegmentFile(store.segmentPath(Instant.now().toEpochMilli()), true);
                 // Read all entries from segments to compact and keep only the latest for each
                 // key
                 for (SegmentFile segment : segmentsToCompact) {
                     Map<Long, DataEntry> entries = segment.readAllEntries();
+                    segment.closeReader();
                     for (long offset : entries.keySet()) {
                         DataEntry entry = entries.get(offset);
                         DirEntry dirEntryMem = store.getInMemoryIndex().get(entry.getKey());
                         if (dirEntryMem == null) {
                             continue; // key was deleted after this entry was written
                         }
-                        int entrySegmentId = segment.getSegmentId();
-                        if (dirEntryMem.getSegmentId() == entrySegmentId && dirEntryMem.getOffset() == offset)
+                        Long entrySegmentId = segment.getSegmentId();
+                        if (dirEntryMem.getSegmentId().equals(entrySegmentId)
+                                && Long.valueOf(dirEntryMem.getOffset()).equals(Long.valueOf(offset))) {
                             latestEntries.put(entry.getKey(), entry);
+                        }
                     }
                 }
                 // Write latest entries to new segment file
@@ -115,9 +116,9 @@ public class Compactor {
                 }
             }
             // Update store with new segment and remove old segments
-            HashMap<Integer, SegmentFile> newSegments = new HashMap<>();
+            Map<Long, SegmentFile> newSegments = new HashMap<>();
             newSegments.put(newSegment.getSegmentId(), newSegment);
-            Set<Integer> oldIds = segmentsToCompact.stream()
+            Set<Long> oldIds = segmentsToCompact.stream()
                     .map(SegmentFile::getSegmentId)
                     .collect(Collectors.toSet());
 
@@ -127,8 +128,8 @@ public class Compactor {
                 store.updateIndexIfNewer(k, newDirEntry, oldIds);
             }
             store.replaceSegments(oldIds, newSegments);
-            newSegment.closeWriter();
-            for (Integer oldId : oldIds) {
+            // newSegment.closeWriter();
+            for (Long oldId : oldIds) {
                 Files.deleteIfExists(store.segmentPath(oldId));
                 Files.deleteIfExists(store.hintPath(oldId));
             }

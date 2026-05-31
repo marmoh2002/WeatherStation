@@ -23,11 +23,13 @@ public class HintFile implements Closeable {
     private final Logger logger = LogManager.getLogger(HintFile.class);
     private final DataOutputStream writer;
     private static final int HINT_FLUSH_THRESHOLD = AppConfigs.getHintFlushThreshold();
+    private final Path filePath;
     private long offset = 0;
     private int hintsSinceFlush = 0;
 
     public HintFile(Path filePath) throws IOException {
         logger.info("Creating HintFile at path: {}", filePath);
+        this.filePath = filePath;
         try {
             this.writer = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(filePath.toFile(), true))); // append
         } catch (Exception e) {
@@ -39,10 +41,10 @@ public class HintFile implements Closeable {
     public long appendHint(HintEntry hint) throws IOException {
         try {
             writer.writeLong(hint.getKey());
-            writer.writeInt(hint.getSegmentId());
+            writer.writeLong(hint.getSegmentId());
             writer.writeLong(hint.getOffset());
             writer.writeInt(hint.getValueSize());
-            offset += Long.BYTES + Integer.BYTES + Long.BYTES + Integer.BYTES; // 24 bytes per hint
+            offset += Long.BYTES + Long.BYTES + Long.BYTES + Integer.BYTES; // 24 bytes per hint
             if (++hintsSinceFlush >= HINT_FLUSH_THRESHOLD) {
                 writer.flush();
                 hintsSinceFlush = 0;
@@ -72,7 +74,7 @@ public class HintFile implements Closeable {
             try {
                 while (true) {
                     long key = reader.readLong();
-                    int segmentId = reader.readInt();
+                    long segmentId = reader.readLong();
                     long offset = reader.readLong();
                     int valueSize = reader.readInt();
 
@@ -82,6 +84,17 @@ public class HintFile implements Closeable {
             }
         }
         return entries;
+    }
+
+    public long getSegmentId() {
+        String fileName = filePath.getFileName().toString();
+        try {
+            return Long.parseLong(fileName.replace(".hint", "").replace("datafile_", ""));
+        } catch (NumberFormatException e) {
+            logger.error("Failed to parse hint ID from file name: {}", fileName, e);
+            throw new IllegalStateException("Invalid hint file name: " + fileName, e);
+        }
+
     }
 
     @Override

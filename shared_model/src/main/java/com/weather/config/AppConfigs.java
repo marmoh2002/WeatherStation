@@ -170,4 +170,14 @@ public class AppConfigs {
         return dir;
     }
 
+    public static long getCompactionInterval() {
+        String interval = System.getenv("COMPACTION_INTERVAL_MINS");
+        try {
+            return interval != null ? Long.parseLong(interval) : 5; // default to compact every 5 minutes
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid COMPACTION_INTERVAL_MINS value, using default: 5");
+            return 5;
+        }
+    }
+
 }

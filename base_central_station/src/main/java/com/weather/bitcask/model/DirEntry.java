@@ -1,17 +1,17 @@
 package com.weather.bitcask.model;
 
 public class DirEntry {
-    private final int segmentId;
+    private final long segmentId;
     private final int valueSize;
     private final long offset;
 
-    public DirEntry(int segmentId, long offset, int valueSize) {
+    public DirEntry(long segmentId, long offset, int valueSize) {
         this.segmentId = segmentId;
         this.offset = offset;
         this.valueSize = valueSize;
     }
 
-    public int getSegmentId() {
+    public Long getSegmentId() {
         return segmentId;
     }
 

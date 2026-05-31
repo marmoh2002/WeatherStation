@@ -96,10 +96,10 @@ public class SegmentFile implements Closeable {
         return entries;
     }
 
-    public int getSegmentId() {
+    public Long getSegmentId() {
         String fileName = filePath.getFileName().toString();
         try {
-            return Integer.parseInt(fileName.replace(".data", ""));
+            return Long.parseLong(fileName.replace(".data", "").replace("datafile_", ""));
         } catch (NumberFormatException e) {
             logger.error("Failed to parse segment ID from file name: {}", fileName, e);
             throw new IllegalStateException("Invalid segment file name: " + fileName, e);
@@ -131,12 +131,16 @@ public class SegmentFile implements Closeable {
         // reader stays open
     }
 
-    @Override
-    public void close() throws IOException {
-        closeWriter();
+    public void closeReader() throws IOException {
         if (reader != null) {
             reader.close();
         }
+    }
+
+    @Override
+    public void close() throws IOException {
+        closeWriter();
+        closeReader();
     }
 
 }

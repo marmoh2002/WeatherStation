@@ -98,10 +98,11 @@ services:
       PARQUET_OUTPUT_BASE_PATH: /app/parquet_output
       PARQUET_BATCH_SIZE: 5
       PARQUET_FLUSH_INTERVAL_MINS: 1
-      MAX_SEGMENT_SIZE_KB: 1024
-      DISK_FLUSH_THRESHOLD: 100000
+      MAX_SEGMENT_SIZE_KB: 66000
+      DISK_FLUSH_THRESHOLD: 1000000
       HINT_FLUSH_THRESHOLD: 5
       BITCASK_STORE_DIRECTORY: /app/bitcask_data
+      COMPACTION_INTERVAL_MINS: 5
     depends_on:
       producer:
         condition: service_started
