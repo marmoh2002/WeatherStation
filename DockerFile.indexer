@@ -1,0 +1,5 @@
+FROM eclipse-temurin:21-jre
+WORKDIR /app
+RUN mkdir -p /app/state
+COPY parquet_es_indexer/target/parquet_es_indexer-1.0-SNAPSHOT-jar-with-dependencies.jar app.jar
+ENTRYPOINT ["java", "-jar", "app.jar"]

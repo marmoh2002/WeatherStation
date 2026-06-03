@@ -9,7 +9,6 @@ import org.apache.kafka.common.errors.WakeupException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import com.weather.archive.engine.ParquetArchiver;
 import com.weather.config.AppConfigs;
 import com.weather.model.StatusMessage;
 import com.weather.pipeline.Pipeline;
