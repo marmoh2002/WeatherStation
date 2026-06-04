@@ -79,15 +79,15 @@ services:
       - SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8081/subjects" ]
+      start_period: 30s
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 5
     ports:
       - "8081:8081"
     networks:
       - KafkaNetwork
     restart: on-failure
-
   consumer:
     build:
       context: .
@@ -96,13 +96,13 @@ services:
       <<: *common-env
       KAFKA_CONSUMER_TOPIC: weather-stations
       PARQUET_OUTPUT_BASE_PATH: /app/parquet_output
-      PARQUET_BATCH_SIZE: 5
-      PARQUET_FLUSH_INTERVAL_MINS: 1
-      MAX_SEGMENT_SIZE_KB: 1000
+      PARQUET_BATCH_SIZE: 100000
+      PARQUET_FLUSH_INTERVAL_MINS: 60
+      MAX_SEGMENT_SIZE_KB: 10000
       DISK_FLUSH_THRESHOLD: 10000
-      HINT_FLUSH_THRESHOLD: 5
+      HINT_FLUSH_THRESHOLD: 20
       BITCASK_STORE_DIRECTORY: /app/bitcask_data
-      COMPACTION_INTERVAL_MINS: 1
+      COMPACTION_INTERVAL_MINS: 3
     depends_on:
       producer:
         condition: service_started
@@ -118,10 +118,6 @@ services:
       - parquet-shared-storage:${PARQUET_OUTPUT_BASE_PATH}
       - bitcask-shared-storage:${BITCASK_STORE_DIRECTORY}
     restart: on-failure
-
-  # ---------------------------------------------------------
-  # 4. BITCASK CLIENT (Utility Container)
-  # ---------------------------------------------------------
   client:
     build:
       context: .
@@ -137,6 +133,60 @@ services:
     working_dir: /client/output
     networks:
       - KafkaNetwork
+  elastic-search:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.0
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - KafkaNetwork
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    restart: on-failure
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.18.0
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elastic-search:9200
+    depends_on:
+      elastic-search:
+        condition: service_healthy
+    networks:
+      - KafkaNetwork
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: on-failure
+  parquet-indexer:
+    build:
+      context: .
+      dockerfile: DockerFile.indexer
+    depends_on:
+      elastic-search:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_URL=http://elastic-search:9200
+      - ELASTICSEARCH_INDEX=weather-status
+      - PARQUET_OUTPUT_BASE_PATH=/app/parquet_output
+      - INDEXER_POLL_INTERVAL_SEC=30
+      - INDEXER_STATE_FILE=/app/state/indexed-files.txt
+    volumes:
+      - parquet-shared-storage:/app/parquet_output:ro
+      - indexer-state-storage:/app/state
+    networks:
+      - KafkaNetwork
+    restart: on-failure
 
 networks:
   KafkaNetwork:
@@ -146,3 +196,6 @@ volumes:
   parquet-shared-storage:
   bitcask-shared-storage:
   csv-shared-storage:
+  indexer-state-storage:
+  es-data:
+

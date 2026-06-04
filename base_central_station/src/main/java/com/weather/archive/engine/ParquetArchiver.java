@@ -1,24 +1,19 @@
 package com.weather.archive.engine;
 
-import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-
-import java.util.concurrent.TimeUnit;
-import java.util.ArrayList;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.time.Instant;
-import java.nio.file.Files;
-import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
-import com.weather.archive.model.TimeBucketExtractor;
-import com.weather.archive.model.PartitionKey;
-import com.weather.config.AppConfigs;
-import com.weather.model.StatusMessage;
-
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.parquet.avro.AvroParquetWriter;
@@ -26,8 +21,11 @@ import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.hadoop.util.HadoopOutputFile;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.Path;
+
+import com.weather.archive.model.PartitionKey;
+import com.weather.archive.model.TimeBucketExtractor;
+import com.weather.config.AppConfigs;
+import com.weather.model.StatusMessage;
 
 public class ParquetArchiver {
 
@@ -37,7 +35,6 @@ public class ParquetArchiver {
     private final ConcurrentHashMap<PartitionKey, List<StatusMessage>> buffers;
     private final ScheduledExecutorService scheduler;
     private final Configuration hadoopConf;
-    private static final AtomicInteger fileSequence = new AtomicInteger(0);
     private volatile boolean closed = false;
 
     public ParquetArchiver(String baseOutputPath) {
@@ -126,7 +123,6 @@ public class ParquetArchiver {
             java.nio.file.Path localDirPath = Paths.get(baseOutputPath, key.getPathString());
             logger.info("Creating directories: {}", localDirPath);
             Files.createDirectories(localDirPath);
-            int seq = fileSequence.incrementAndGet() % 1000;
             String fileName = "data_" + key.getStationId() + "_" + key.getCurrentHourBucket() + "_"
                     + Instant.now().toEpochMilli() + ".parquet";
             Path parquetFilePath = new Path(localDirPath.toString(), fileName);
