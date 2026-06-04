@@ -142,12 +142,14 @@ services:
       - ES_JAVA_OPTS=-Xms512m -Xmx512m
       - xpack.security.enabled=false
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      test: [ "CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 10
     networks:
       - KafkaNetwork
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
     restart: on-failure
   kibana:
     image: docker.elastic.co/kibana/kibana:8.18.0
@@ -157,10 +159,15 @@ services:
       - ELASTICSEARCH_HOSTS=http://elastic-search:9200
     depends_on:
       elastic-search:
-          condition: service_healthy
+        condition: service_healthy
     networks:
       - KafkaNetwork
-    restart: on-failure   
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: on-failure
   parquet-indexer:
     build:
       context: .
@@ -190,3 +197,5 @@ volumes:
   bitcask-shared-storage:
   csv-shared-storage:
   indexer-state-storage:
+  es-data:
+

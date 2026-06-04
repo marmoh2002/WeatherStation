@@ -18,6 +18,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.time.Instant;
 import java.util.Set;
+import java.util.ArrayList;
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.FileInputStream;
 import java.io.Closeable;
 
 public class BitCaskStore implements Closeable {
@@ -51,6 +56,13 @@ public class BitCaskStore implements Closeable {
             } catch (IOException e) {
                 logger.error("Failed to recover from hint files: ", e);
                 throw new Exception("Failed to recover from hint files", e);
+            }
+            // Recover any segments that are missing hint files (e.g. after a crash)
+            try {
+                recoverSegmentsWithoutHints();
+            } catch (IOException e) {
+                logger.error("Failed to recover segments without hint files: ", e);
+                throw new Exception("Failed to recover segments without hint files", e);
             }
             try {
                 reopenSegmentFiles(); // reopen all .data files and set active segment
@@ -199,6 +211,89 @@ public class BitCaskStore implements Closeable {
         }
 
     }
+
+    /**
+     * Recovers segments that do not have a corresponding hint file.
+     * This handles non-graceful shutdowns where the active segment's hint file
+     * was never written. For each orphaned .data file, the segment is scanned
+     * sequentially to rebuild the in-memory index, and a hint file is created.
+     */
+    private void recoverSegmentsWithoutHints() throws IOException {
+        // Collect all .data file paths
+        List<Path> dataFiles = Files.list(storeDirectory)
+                .filter(p -> p.toString().endsWith(".data"))
+                .sorted()
+                .collect(Collectors.toList());
+
+        // Collect all existing hint file segment IDs for fast lookup
+        Set<Long> hintSegmentIds = Files.list(storeDirectory)
+                .filter(p -> p.toString().endsWith(".hint"))
+                .map(p -> Long.parseLong(
+                        p.getFileName().toString().replace(".hint", "").replace("datafile_", "")))
+                .collect(Collectors.toSet());
+
+        for (Path dataPath : dataFiles) {
+            long segmentId;
+            try {
+                segmentId = Long.parseLong(
+                        dataPath.getFileName().toString().replace(".data", "").replace("datafile_", ""));
+            } catch (NumberFormatException e) {
+                logger.error("Failed to parse segment ID from file {}", dataPath, e);
+                continue;
+            }
+
+            if (hintSegmentIds.contains(segmentId)) {
+                continue; // hint file already exists, already recovered
+            }
+
+            logger.warn("No hint file found for segment {}. Scanning data file to recover entries.", segmentId);
+
+            // Scan the .data file entry by entry to rebuild index and collect hints
+            List<HintEntry> recoveredHints = new ArrayList<>();
+            try (DataInputStream dis = new DataInputStream(
+                    new BufferedInputStream(new FileInputStream(dataPath.toFile())))) {
+                long offset = 0;
+                while (true) {
+                    try {
+                        long key = dis.readLong();
+                        int valueSize = dis.readInt();
+                        byte[] value = new byte[valueSize];
+                        dis.readFully(value);
+
+                        // Update in-memory index (latest value per key wins)
+                        inMemoryIndex.put(key, new DirEntry(segmentId, offset, valueSize));
+
+                        // Collect hint entry for writing
+                        recoveredHints.add(new HintEntry(key, segmentId, offset, valueSize));
+
+                        offset += Long.BYTES + Integer.BYTES + valueSize;
+
+                        logger.debug("Recovered entry for key {} at offset {} from segment {}",
+                                key, offset, segmentId);
+                    } catch (EOFException eof) {
+                        break; // finished reading segment
+                    }
+                }
+            } catch (IOException e) {
+                logger.error("Error scanning segment file {} for recovery", dataPath, e);
+                throw e;
+            }
+
+            // Write the missing hint file
+            Path missingHintPath = hintPath(segmentId);
+            try (HintFile hf = new HintFile(missingHintPath)) {
+                for (HintEntry hint : recoveredHints) {
+                    hf.appendHint(hint);
+                }
+                logger.info("Created missing hint file for segment {} with {} entries",
+                        segmentId, recoveredHints.size());
+            } catch (IOException e) {
+                logger.error("Failed to create hint file for recovered segment {}", segmentId, e);
+                throw e;
+            }
+        }
+    }
+
 
     private void reopenSegmentFiles() throws Exception {
         Files.list(storeDirectory).filter(p -> p.toString().endsWith(".data")).sorted().forEach(segPath -> {
