@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: schema-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: schema-registry
+  template:
+    metadata:
+      labels:
+        app: schema-registry
+    spec:
+      # Disable K8s service-link env var injection.
+      # Without this, K8s injects SCHEMA_REGISTRY_PORT=tcp://10.x.x.x:8081
+      # which the Confluent entrypoint misinterprets as a config override for
+      # the deprecated "port" setting, crashing the container.
+      enableServiceLinks: false
+      # Init container waits for Kafka to be ready before starting Schema Registry
+      initContainers:
+        - name: wait-for-kafka
+          image: apache/kafka:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - bash
+            - -c
+            - |
+              echo "Waiting for Kafka to be ready..."
+              until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list; do
+                echo "Kafka not ready yet, retrying in 3s..."
+                sleep 3
+              done
+              echo "Kafka is ready!"
+      containers:
+        - name: schema-registry
+          image: confluentinc/cp-schema-registry:7.5.0
+          ports:
+            - containerPort: 8081
+          env:
+            - name: SCHEMA_REGISTRY_HOST_NAME
+              value: "schema-registry"
+            - name: SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS
+              value: "kafka:9092"
+            - name: SCHEMA_REGISTRY_LISTENERS
+              value: "http://0.0.0.0:8081"
+          readinessProbe:
+            httpGet:
+              path: /subjects
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /subjects
+              port: 8081
+            initialDelaySeconds: 45
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: schema-registry
+spec:
+  selector:
+    app: schema-registry
+  ports:
+    - port: 8081
+      targetPort: 8081

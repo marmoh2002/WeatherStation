@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: consumer
+  template:
+    metadata:
+      labels:
+        app: consumer
+    spec:
+      initContainers:
+        - name: wait-for-schema-registry
+          image: alpine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              
+              echo "Waiting for Schema Registry..."
+              until wget -q --spider http://schema-registry:8081/subjects; do
+                echo "Schema Registry not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Schema Registry is ready!"
+      containers:
+        - name: consumer
+          image: weather-consumer:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: KAFKA_BROKER
+              valueFrom:
+                configMapKeyRef:
+                  name: common-env
+                  key: KAFKA_BROKER
+            - name: SCHEMA_REGISTRY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: common-env
+                  key: SCHEMA_REGISTRY_URL
+            - name: KAFKA_CONSUMER_TOPIC
+              value: "weather-stations"
+            - name: PARQUET_OUTPUT_BASE_PATH
+              value: "/app/parquet_output"
+            - name: PARQUET_BATCH_SIZE
+              value: "100000"
+            - name: PARQUET_FLUSH_INTERVAL_MINS
+              value: "60"
+            - name: MAX_SEGMENT_SIZE_KB
+              value: "10000"
+            - name: DISK_FLUSH_THRESHOLD
+              value: "10000"
+            - name: HINT_FLUSH_THRESHOLD
+              value: "20"
+            - name: BITCASK_STORE_DIRECTORY
+              value: "/app/bitcask_data"
+            - name: COMPACTION_INTERVAL_MINS
+              value: "3"
+          volumeMounts:
+            - name: parquet-storage
+              mountPath: /app/parquet_output
+            - name: bitcask-storage
+              mountPath: /app/bitcask_data
+      volumes:
+        - name: parquet-storage
+          persistentVolumeClaim:
+            claimName: parquet-shared-storage
+        - name: bitcask-storage
+          persistentVolumeClaim:
+            claimName: bitcask-shared-storage
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: consumer
+spec:
+  selector:
+    app: consumer
+  ports:
+    - port: 8080
+      targetPort: 8080
