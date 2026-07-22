@@ -9,3 +9,6 @@ w.txt
 Dockerfile.consumer.minimal
 Dockerfile.producer.minimal
 Dockerfile.stream.minimal
+
+# Minikube binary
+minikube-linux-amd64

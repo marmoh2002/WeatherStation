@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stream
+  template:
+    metadata:
+      labels:
+        app: stream
+    spec:
+      initContainers:
+        - name: wait-for-schema-registry
+          image: alpine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              
+              echo "Waiting for Schema Registry..."
+              until wget -q --spider http://schema-registry:8081/subjects; do
+                echo "Schema Registry not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Schema Registry is ready!"
+      containers:
+        - name: stream
+          image: weather-stream:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BROKER
+              valueFrom:
+                configMapKeyRef:
+                  name: common-env
+                  key: KAFKA_BROKER
+            - name: SCHEMA_REGISTRY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: common-env
+                  key: SCHEMA_REGISTRY_URL
+            - name: KAFKA_WARNING_INPUT_TOPIC
+              value: "weather-stations"
+            - name: KAFKA_WARNING_OUTPUT_TOPIC
+              value: "rain-alerts"
+            - name: KAFKA_HUMIDITY_THRESHOLD
+              value: "70"
+      restartPolicy: Always

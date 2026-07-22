@@ -24,6 +24,9 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - KafkaNetwork
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    restart: on-failure
 
   # producer
   producer:
@@ -163,7 +166,7 @@ services:
     networks:
       - KafkaNetwork
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      test: [ "CMD", "curl", "-f", "http://localhost:5601/api/status" ]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -198,4 +201,4 @@ volumes:
   csv-shared-storage:
   indexer-state-storage:
   es-data:
-
+  kafka-data:

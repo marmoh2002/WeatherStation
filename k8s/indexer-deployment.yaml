@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: parquet-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: parquet-indexer
+  template:
+    metadata:
+      labels:
+        app: parquet-indexer
+    spec:
+      initContainers:
+        - name: wait-for-elasticsearch
+          image: alpine:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              
+              echo "Waiting for Elasticsearch..."
+              until wget -q --spider http://elastic-search:9200/_cluster/health; do
+                echo "Elasticsearch not ready, retrying in 5s..."
+                sleep 5
+              done
+              echo "Elasticsearch is ready!"
+      containers:
+        - name: indexer
+          image: weather-indexer:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ELASTICSEARCH_URL
+              value: "http://elastic-search:9200"
+            - name: ELASTICSEARCH_INDEX
+              value: "weather-status"
+            - name: PARQUET_OUTPUT_BASE_PATH
+              value: "/app/parquet_output"
+            - name: INDEXER_POLL_INTERVAL_SEC
+              value: "30"
+            - name: INDEXER_STATE_FILE
+              value: "/app/state/indexed-files.txt"
+          volumeMounts:
+            - name: parquet-storage
+              mountPath: /app/parquet_output
+              readOnly: true
+            - name: indexer-state
+              mountPath: /app/state
+      volumes:
+        - name: parquet-storage
+          persistentVolumeClaim:
+            claimName: parquet-shared-storage
+        - name: indexer-state
+          persistentVolumeClaim:
+            claimName: indexer-state-storage
+      restartPolicy: Always
