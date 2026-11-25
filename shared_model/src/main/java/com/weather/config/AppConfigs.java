@@ -32,6 +32,7 @@ public class AppConfigs {
 
     public static final String KAFKA_CONSUMER_GROUP_ID = "base-station-group";
     public static final String consumerTopicName = "weather-stations";
+    public static final String deadLetterTopicName = "weather-dead-letter";
 
     public static boolean isSpecificAvroReader() {
         String specificReader = System.getenv("SPECIFIC_AVRO_READER");
@@ -50,6 +51,14 @@ public class AppConfigs {
         String topic = System.getenv("KAFKA_CONSUMER_TOPIC");
         if (topic == null || topic.isEmpty()) {
             return consumerTopicName;
+        }
+        return topic;
+    }
+
+    public static String getDeadLetterTopicName() {
+        String topic = System.getenv("KAFKA_DEAD_LETTER_TOPIC");
+        if (topic == null || topic.isEmpty()) {
+            return deadLetterTopicName;
         }
         return topic;
     }
