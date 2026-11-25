@@ -91,6 +91,7 @@ services:
     networks:
       - KafkaNetwork
     restart: on-failure
+
   consumer:
     build:
       context: .
@@ -99,13 +100,15 @@ services:
       <<: *common-env
       KAFKA_CONSUMER_TOPIC: weather-stations
       PARQUET_OUTPUT_BASE_PATH: /app/parquet_output
-      PARQUET_BATCH_SIZE: 100000
+      PARQUET_BATCH_SIZE: 1000
       PARQUET_FLUSH_INTERVAL_MINS: 60
       MAX_SEGMENT_SIZE_KB: 10000
       DISK_FLUSH_THRESHOLD: 10000
       HINT_FLUSH_THRESHOLD: 20
       BITCASK_STORE_DIRECTORY: /app/bitcask_data
       COMPACTION_INTERVAL_MINS: 3
+    ports:
+      - "8080:8080"
     depends_on:
       producer:
         condition: service_started
@@ -121,6 +124,7 @@ services:
       - parquet-shared-storage:${PARQUET_OUTPUT_BASE_PATH}
       - bitcask-shared-storage:${BITCASK_STORE_DIRECTORY}
     restart: on-failure
+
   client:
     build:
       context: .

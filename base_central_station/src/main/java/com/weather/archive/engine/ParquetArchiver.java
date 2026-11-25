@@ -1,5 +1,6 @@
 package com.weather.archive.engine;
 
+import java.util.UUID;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -123,8 +124,7 @@ public class ParquetArchiver {
             java.nio.file.Path localDirPath = Paths.get(baseOutputPath, key.getPathString());
             logger.info("Creating directories: {}", localDirPath);
             Files.createDirectories(localDirPath);
-            String fileName = "data_" + key.getStationId() + "_" + key.getCurrentHourBucket() + "_"
-                    + Instant.now().toEpochMilli() + ".parquet";
+            String fileName = "weather_data_" + UUID.randomUUID() + ".parquet";
             Path parquetFilePath = new Path(localDirPath.toString(), fileName);
             logger.info("Writing parquet file: {}", parquetFilePath);
             // try-with-resources statement. No need to explicitly close the writer after

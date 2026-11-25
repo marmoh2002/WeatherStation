@@ -25,6 +25,7 @@ public class SegmentFile implements Closeable {
     private final RandomAccessFile reader;
     private boolean isActive = false;
     private static final int FLUSH_THRESHOLD = AppConfigs.getDiskFlushThreshold();
+    public static final int HEADER_SIZE = Integer.BYTES + Long.BYTES + Long.BYTES + Integer.BYTES; // 24 bytes: CRC32(4) + Timestamp(8) + Key(8) + ValSize(4)
     private int writesSinceFlush = 0;
     private static final Logger logger = LogManager.getLogger(SegmentFile.class);
 
@@ -49,6 +50,8 @@ public class SegmentFile implements Closeable {
             throw new IllegalStateException("Cannot write to a closed segment");
         }
         long entryOffset = currentOffset;
+        writer.writeInt((int) entry.getCrc32()); // 4-byte CRC32
+        writer.writeLong(entry.getTimestamp()); // 8-byte Timestamp
         writer.writeLong(entry.getKey()); // write key
         writer.writeInt(entry.getValueSize()); // write value size
         writer.write(entry.getValue()); // write entry data
@@ -57,18 +60,25 @@ public class SegmentFile implements Closeable {
             writer.flush();
             writesSinceFlush = 0;
         }
-        currentOffset += Long.BYTES + Integer.BYTES + entry.getValueSize(); // update current offset
+        currentOffset += HEADER_SIZE + entry.getValueSize(); // update current offset
         return entryOffset;
     }
 
     public DataEntry readEntry(long offset) throws IOException {
         synchronized (this) {
             reader.seek(offset);
+            int crc = reader.readInt();
+            long timestamp = reader.readLong();
             long key = reader.readLong();
             int valueSize = reader.readInt();
             byte[] value = new byte[valueSize];
             reader.readFully(value);
-            return new DataEntry(key, value);
+
+            DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
+            if (!entry.isValid()) {
+                throw new IOException("Corrupted record detected at offset " + offset + " (CRC32 mismatch)");
+            }
+            return entry;
         }
     }
 
@@ -79,12 +89,25 @@ public class SegmentFile implements Closeable {
             try {
                 long offset = 0;
                 while (true) {
+                    int crc = reader.readInt();
+                    long timestamp = reader.readLong();
                     long key = reader.readLong();
                     int valueSize = reader.readInt();
+                    if (valueSize < 0) {
+                        logger.error("Negative valueSize {} at offset {} in segment {}, stopping read.",
+                                valueSize, offset, filePath);
+                        break;
+                    }
                     byte[] value = new byte[valueSize];
                     reader.readFully(value);
-                    entries.put(offset, new DataEntry(key, value));
-                    offset += Long.BYTES + Integer.BYTES + valueSize;
+
+                    DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
+                    if (!entry.isValid()) {
+                        logger.error("CRC32 mismatch at offset {} in segment {}, stopping read.", offset, filePath);
+                        break;
+                    }
+                    entries.put(offset, entry);
+                    offset += HEADER_SIZE + valueSize;
                     logger.debug("Read entry with key {} from offset {}", key, offset);
                 }
             } catch (EOFException e) {
@@ -143,7 +166,7 @@ public class SegmentFile implements Closeable {
         closeReader();
     }
 
-    public record EntryHeader(long key, int valueSize, long offset) {
+    public record EntryHeader(long crc32, long timestamp, long key, int valueSize, long offset) {
     }
 
     public DataInputStream openForSequentialRead() throws IOException {

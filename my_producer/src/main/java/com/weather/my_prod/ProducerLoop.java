@@ -71,16 +71,19 @@ public class ProducerLoop implements Runnable {
     }
 
     private static StatusMessage synthesizeMessage(long stationId) {
+        long sNo = sequenceNumber.incrementAndGet();
         if (random.nextDouble() < 0.10) {
-            return null; // 10% drop rate
+            logger.info("Station " + stationId + " dropped packet with sequence no: " + sNo);
+            return null;
         }
         WeatherReading weather = WeatherReading.newBuilder()
-                .setHumidity(random.nextInt(101)) // 0 – 100 %
-                .setTemperature(random.nextInt(121) - 20) // -20 – 100 °F
-                .setWindSpeed(random.nextInt(151)).build(); // 0 – 150 km/h
+                .setHumidity(20 + random.nextInt(81)) // 20 – 100 %
+                .setTemperature(30 + random.nextInt(81)) // 30 – 110 °F
+                .setWindSpeed(random.nextInt(51)) // 0 – 50 km/h
+                .build();
         return StatusMessage.newBuilder()
                 .setStationId(stationId)
-                .setSNo(sequenceNumber.incrementAndGet())
+                .setSNo(sNo)
                 .setBatteryStatus(randomBatteryStatus())
                 .setStatusTimestamp(Instant.now().getEpochSecond())
                 .setWeather(weather)

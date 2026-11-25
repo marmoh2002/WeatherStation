@@ -89,16 +89,25 @@ public class Compactor {
                     long offset = 0;
 
                     while (true) {
+                        int crc;
+                        long timestamp;
                         long key;
                         int valueSize;
                         try {
+                            crc = in.readInt();
+                            timestamp = in.readLong();
                             key = in.readLong();
                             valueSize = in.readInt();
                         } catch (EOFException e) {
                             break; // clean end of segment
                         }
+                        if (valueSize < 0) {
+                            logger.error("Corrupted valueSize {} at offset {} in segment {}, stopping compaction read.",
+                                    valueSize, offset, segmentId);
+                            break;
+                        }
                         long recordOffset = offset;
-                        offset += Long.BYTES + Integer.BYTES + valueSize;
+                        offset += SegmentFile.HEADER_SIZE + valueSize;
 
                         // Is this record the current live version?
                         DirEntry live = store.getInMemoryIndex().get(key);
@@ -118,11 +127,18 @@ public class Compactor {
                             continue;
                         }
 
-                        // Live record: read value and immediately stream to new segment
+                        // Live record: read value, verify CRC32, and immediately stream to new segment
                         byte[] value = new byte[valueSize];
                         in.readFully(value);
 
-                        long newOffset = newSegment.appendEntry(new DataEntry(key, value));
+                        DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
+                        if (!entry.isValid()) {
+                            logger.error("Corrupted live record at offset {} in segment {} (CRC32 mismatch), skipping.",
+                                    recordOffset, segmentId);
+                            continue;
+                        }
+
+                        long newOffset = newSegment.appendEntry(new DataEntry(timestamp, key, value));
                         writtenOffsets.put(key, newOffset);
                         writtenValueSizes.put(key, valueSize);
                     }

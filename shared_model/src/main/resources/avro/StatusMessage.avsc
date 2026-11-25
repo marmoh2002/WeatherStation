@@ -12,6 +12,11 @@
       "type": "long"
     },
     {
+      "name": "status",
+      "type": "string",
+      "default": "RECEIVED"
+    },
+    {
       "name": "battery_status",
       "type": "string"
     },
@@ -21,24 +26,28 @@
     },
     {
       "name": "weather",
-      "type": {
-        "type": "record",
-        "name": "WeatherReading",
-        "fields": [
-          {
-            "name": "humidity",
-            "type": "int"
-          },
-          {
-            "name": "temperature",
-            "type": "int"
-          },
-          {
-            "name": "wind_speed",
-            "type": "int"
-          }
-        ]
-      }
+      "type": [
+        "null",
+        {
+          "type": "record",
+          "name": "WeatherReading",
+          "fields": [
+            {
+              "name": "humidity",
+              "type": "int"
+            },
+            {
+              "name": "temperature",
+              "type": "int"
+            },
+            {
+              "name": "wind_speed",
+              "type": "int"
+            }
+          ]
+        }
+      ],
+      "default": null
     }
   ]
 }

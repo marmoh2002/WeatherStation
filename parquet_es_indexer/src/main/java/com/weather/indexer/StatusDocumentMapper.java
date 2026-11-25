@@ -22,6 +22,7 @@ public class StatusDocumentMapper {
 
         doc.put("station_id", msg.getStationId());
         doc.put("s_no", msg.getSNo());
+        doc.put("status", msg.getStatus() != null ? msg.getStatus().toString() : "RECEIVED");
         doc.put("battery_status", msg.getBatteryStatus());
         
         doc.put("status_timestamp", msg.getStatusTimestamp());

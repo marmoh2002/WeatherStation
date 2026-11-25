@@ -4,7 +4,7 @@ public class AppConfigs {
 
     // producer
     public static final String producerApplicationID = "ProducerApp";
-    public static final String producerTopicName = "WeatherStationTopic";
+    public static final String producerTopicName = "weather-stations";
 
     public static String getSchemaRegistryUrl() {
         return System.getenv("SCHEMA_REGISTRY_URL") != null ? System.getenv("SCHEMA_REGISTRY_URL")
@@ -31,7 +31,7 @@ public class AppConfigs {
     public static final Boolean SPECIFIC_AVRO_READER = true;
 
     public static final String KAFKA_CONSUMER_GROUP_ID = "base-station-group";
-    public static final String consumerTopicName = "WeatherStationTopic";
+    public static final String consumerTopicName = "weather-stations";
 
     public static boolean isSpecificAvroReader() {
         String specificReader = System.getenv("SPECIFIC_AVRO_READER");
@@ -171,12 +171,13 @@ public class AppConfigs {
     }
 
     public static long getCompactionInterval() {
+        long def = 3;
         String interval = System.getenv("COMPACTION_INTERVAL_MINS");
         try {
-            return interval != null ? Long.parseLong(interval) : 5; // default to compact every 5 minutes
+            return interval != null ? Long.parseLong(interval) : def; // default to compact every 5 minutes
         } catch (NumberFormatException e) {
             System.err.println("Invalid COMPACTION_INTERVAL_MINS value, using default: 5");
-            return 5;
+            return def;
         }
     }
 

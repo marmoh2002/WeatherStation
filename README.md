@@ -15,7 +15,8 @@ The system combines **event-driven streaming** with a **dual-storage architectur
 2. **Parquet Columnar Storage & Elastic Search Stack**: Time-partitioned columnar Parquet files automatically indexed into Elasticsearch and visualized in Kibana for large-scale analytics and aggregations.
 
 ---
-
+![Diagram](./data_flow.svg)
+---
 ## 📸 System Architecture
 
 ```mermaid

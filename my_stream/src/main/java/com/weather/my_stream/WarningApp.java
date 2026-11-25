@@ -8,7 +8,8 @@ import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.util.Properties;
 
 import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
@@ -20,6 +21,7 @@ import com.weather.config.AppConfigs;
 public class WarningApp {
 
     private static final Logger logger = LogManager.getLogger(WarningApp.class);
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     public static void main(String[] args) throws InterruptedException {
         Properties props = new Properties();
@@ -33,6 +35,9 @@ public class WarningApp {
         KStream<Long, StatusMessage> weatherStream = builder.stream(AppConfigs.getWarningInputTopic());
         KStream<Long, StatusMessage> rainingStream = weatherStream.filter((stationId, message) -> {
             try {
+                if (message == null || message.getWeather() == null) {
+                    return false; // ignore messages without weather data
+                }
                 int humidity = message.getWeather().getHumidity();
                 boolean isRaining = humidity > AppConfigs.getHumidityThreshold(); // simple threshold for rain
 
@@ -44,9 +49,23 @@ public class WarningApp {
             }
         });
 
-        rainingStream.mapValues(message -> "Rain alert! Station " + message.getStationId()
-                + " humidity=" + message.getWeather().getHumidity() + "%")
-                .to(AppConfigs.getWarningOutputTopic(), Produced.with(Serdes.Long(), Serdes.String()));
+        rainingStream.mapValues(message -> {
+            try {
+                // Build the structured JSON object
+                ObjectNode alert = objectMapper.createObjectNode();
+                alert.put("station_id", message.getStationId());
+                alert.put("status_timestamp", message.getStatusTimestamp());
+                alert.put("humidity", message.getWeather().getHumidity());
+                alert.put("alert_type", "RAIN_TRIGGER");
+                alert.put("message",
+                        "Heavy precipitation alert: humidity exceeds " + AppConfigs.getHumidityThreshold() + "%");
+                // Convert JSON object to String
+                return objectMapper.writeValueAsString(alert);
+            } catch (Exception e) {
+                logger.error("Failed to serialize rain alert: " + e.getMessage());
+                return "{}";
+            }
+        }).to(AppConfigs.getWarningOutputTopic(), Produced.with(Serdes.Long(), Serdes.String()));
 
         // builder.build() creates the topology, but doesn't start processing yet
         Topology topology = builder.build();

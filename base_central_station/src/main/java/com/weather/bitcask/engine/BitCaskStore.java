@@ -23,6 +23,7 @@ import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.FileInputStream;
+import java.io.RandomAccessFile;
 import java.io.Closeable;
 
 public class BitCaskStore implements Closeable {
@@ -250,33 +251,55 @@ public class BitCaskStore implements Closeable {
 
             // Scan the .data file entry by entry to rebuild index and collect hints
             List<HintEntry> recoveredHints = new ArrayList<>();
+            long validOffset = 0;
             try (DataInputStream dis = new DataInputStream(
                     new BufferedInputStream(new FileInputStream(dataPath.toFile())))) {
-                long offset = 0;
                 while (true) {
                     try {
+                        int crc = dis.readInt();
+                        long timestamp = dis.readLong();
                         long key = dis.readLong();
                         int valueSize = dis.readInt();
+                        if (valueSize < 0) {
+                            logger.error("Negative valueSize {} at offset {} in {}, truncating.",
+                                    valueSize, validOffset, dataPath);
+                            break;
+                        }
                         byte[] value = new byte[valueSize];
                         dis.readFully(value);
 
+                        DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
+                        if (!entry.isValid()) {
+                            logger.error("CRC32 mismatch at offset {} in {}, truncating corrupted tail.",
+                                    validOffset, dataPath);
+                            break;
+                        }
+
                         // Update in-memory index (latest value per key wins)
-                        inMemoryIndex.put(key, new DirEntry(segmentId, offset, valueSize));
+                        inMemoryIndex.put(key, new DirEntry(segmentId, validOffset, valueSize));
 
                         // Collect hint entry for writing
-                        recoveredHints.add(new HintEntry(key, segmentId, offset, valueSize));
+                        recoveredHints.add(new HintEntry(key, segmentId, validOffset, valueSize));
 
-                        offset += Long.BYTES + Integer.BYTES + valueSize;
+                        validOffset += SegmentFile.HEADER_SIZE + valueSize;
 
                         logger.debug("Recovered entry for key {} at offset {} from segment {}",
-                                key, offset, segmentId);
+                                key, validOffset, segmentId);
                     } catch (EOFException eof) {
-                        break; // finished reading segment
+                        break; // finished reading segment (or torn write at EOF)
                     }
                 }
             } catch (IOException e) {
                 logger.error("Error scanning segment file {} for recovery", dataPath, e);
                 throw e;
+            }
+
+            if (validOffset < Files.size(dataPath)) {
+                logger.warn("Truncating segment {} from {} to {} bytes due to torn/corrupted trailing record.",
+                        dataPath, Files.size(dataPath), validOffset);
+                try (RandomAccessFile raf = new RandomAccessFile(dataPath.toFile(), "rw")) {
+                    raf.setLength(validOffset);
+                }
             }
 
             // Write the missing hint file

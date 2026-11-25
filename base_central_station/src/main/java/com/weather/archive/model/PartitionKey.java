@@ -6,21 +6,15 @@ import com.weather.archive.model.TimeBucketExtractor.TimeBucket;
 import com.weather.model.StatusMessage;
 
 public class PartitionKey {
-    private final Long stationId;
     private final TimeBucket timeBucket;
 
     public PartitionKey(StatusMessage message) {
-        this.stationId = message.getStationId();
         this.timeBucket = TimeBucketExtractor.getTimeBucketFromSeconds(message.getStatusTimestamp());
     }
 
     public String getPathString() {
-        return String.format("station_id=%d/year=%d/month=%02d/day=%02d/hour=%02d",
-                stationId, timeBucket.year, timeBucket.month, timeBucket.day, timeBucket.hour);
-    }
-
-    public Long getStationId() {
-        return stationId;
+        return String.format("year=%d/month=%02d/day=%02d/hour=%02d",
+                timeBucket.year, timeBucket.month, timeBucket.day, timeBucket.hour);
     }
 
     // For stale partition detection, compare just the current hour bucket
@@ -36,7 +30,7 @@ public class PartitionKey {
         if (other == null || getClass() != other.getClass())
             return false;
         PartitionKey that = (PartitionKey) other;
-        return Objects.equals(stationId, that.stationId) && Objects.equals(timeBucket.year, that.timeBucket.year)
+        return Objects.equals(timeBucket.year, that.timeBucket.year)
                 && Objects.equals(timeBucket.month, that.timeBucket.month)
                 && Objects.equals(timeBucket.day, that.timeBucket.day)
                 && Objects.equals(timeBucket.hour, that.timeBucket.hour);
@@ -44,6 +38,6 @@ public class PartitionKey {
 
     @Override
     public int hashCode() {
-        return Objects.hash(stationId, timeBucket.year, timeBucket.month, timeBucket.day, timeBucket.hour);
+        return Objects.hash(timeBucket.year, timeBucket.month, timeBucket.day, timeBucket.hour);
     }
 }
