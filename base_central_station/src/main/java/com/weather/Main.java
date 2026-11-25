@@ -65,7 +65,8 @@ public class Main {
             // Step 3 — stop the API server to release port 8080
             apiServer.stop();
 
-            // Step 4 — flush remaining parquet buffers
+            // Step 4 — drain async parquet worker and flush remaining parquet buffers
+            pipeline.shutdown();
             archiver.close();
 
             // Step 5 — close segment files

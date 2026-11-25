@@ -1,9 +1,11 @@
 package com.weather.consumer;
 
 import java.util.List;
+import java.util.Set;
 
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.WakeupException;
 
 import org.apache.logging.log4j.LogManager;
@@ -26,15 +28,32 @@ public class ConsumerLoop implements Runnable {
     @Override
     public void run() {
         consumer.subscribe(List.of(AppConfigs.getConsumerTopicName()));
+        boolean paused = false;
         try {
             while (true) {
+                Set<TopicPartition> assigned = consumer.assignment();
+                if (!paused && pipeline.isParquetQueueHigh() && !assigned.isEmpty()) {
+                    logger.warn("Parquet queue reached >=80% capacity ({}/{}). Pausing Kafka consumer.",
+                            pipeline.getParquetQueueSize(), Pipeline.PARQUET_QUEUE_CAPACITY);
+                    consumer.pause(assigned);
+                    paused = true;
+                } else if (paused && pipeline.isParquetQueueLow() && !assigned.isEmpty()) {
+                    logger.info("Parquet queue drained to {}/{}. Resuming Kafka consumer.",
+                            pipeline.getParquetQueueSize(), Pipeline.PARQUET_QUEUE_CAPACITY);
+                    consumer.resume(assigned);
+                    paused = false;
+                }
+
                 ConsumerRecords<Long, StatusMessage> records = consumer.poll(java.time.Duration.ofMillis(1000));
                 records.forEach(record -> {
-                    logger.debug("Received message: " + record.value().getStationId() + " - "
-                            + record.value().getWeather().getTemperature() + "°C, "
-                            + record.value().getWeather().getHumidity() + "%" + " at "
-                            + record.value().getStatusTimestamp());
-                    pipeline.process(record.value());
+                    StatusMessage msg = record.value();
+                    if (msg != null && msg.getWeather() != null) {
+                        logger.debug("Received message: " + msg.getStationId() + " - "
+                                + msg.getWeather().getTemperature() + "°F, "
+                                + msg.getWeather().getHumidity() + "%" + " at "
+                                + msg.getStatusTimestamp());
+                    }
+                    pipeline.process(msg);
                 });
             }
 
