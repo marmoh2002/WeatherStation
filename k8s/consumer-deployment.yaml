@@ -49,7 +49,9 @@ spec:
             - name: PARQUET_OUTPUT_BASE_PATH
               value: "/app/parquet_output"
             - name: PARQUET_BATCH_SIZE
-              value: "100000"
+              value: "1000"
+            - name: PARQUET_FLUSH_INTERVAL_SECS
+              value: "30"
             - name: PARQUET_FLUSH_INTERVAL_MINS
               value: "60"
             - name: MAX_SEGMENT_SIZE_KB

@@ -153,11 +153,12 @@ public class AppConfigs {
 
     public static long getMaxSegmentSize() {
         String maxSize = System.getenv("MAX_SEGMENT_SIZE_KB");
+        long defaultBytes = 50L * 1024L * 1024L; // default 50 MB
         try {
-            return maxSize != null ? Long.parseLong(maxSize) : 10 * 1024; // default to 10KB
+            return maxSize != null ? Long.parseLong(maxSize) * 1024L : defaultBytes;
         } catch (NumberFormatException e) {
-            System.err.println("Invalid MAX_SEGMENT_SIZE value, using default: 10KB");
-            return 10 * 1024;
+            System.err.println("Invalid MAX_SEGMENT_SIZE_KB value, using default: 50MB");
+            return defaultBytes;
         }
     }
 
