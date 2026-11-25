@@ -4,6 +4,7 @@ import java.util.UUID;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,8 +33,10 @@ public class ParquetArchiver {
 
     private static final Logger logger = LogManager.getLogger(ParquetArchiver.class);
     private final int BATCH_SIZE = AppConfigs.getParquetBatchSize();
+    private final int FLUSH_INTERVAL_SECS = AppConfigs.getParquetFlushIntervalSecs();
     private final String baseOutputPath;
     private final ConcurrentHashMap<PartitionKey, List<StatusMessage>> buffers;
+    private final ConcurrentHashMap<PartitionKey, Long> batchStartTimes;
     private final ScheduledExecutorService scheduler;
     private final Configuration hadoopConf;
     private volatile boolean closed = false;
@@ -43,12 +46,14 @@ public class ParquetArchiver {
                 ? baseOutputPath
                 : AppConfigs.getParquetOutputBasePath();
         this.buffers = new ConcurrentHashMap<>();
+        this.batchStartTimes = new ConcurrentHashMap<>();
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
         this.hadoopConf = new Configuration();
 
-        logger.info("Starting ParquetArchiver background thread for flushing stale partitions...");
-        scheduler.scheduleAtFixedRate(this::flushStalePartitions, 0, AppConfigs.getParquetFlushIntervalMins(),
-                TimeUnit.MINUTES);
+        logger.info("Starting ParquetArchiver background thread (dual-trigger flush every {}s)...",
+                FLUSH_INTERVAL_SECS);
+        scheduler.scheduleAtFixedRate(this::flushStalePartitions, FLUSH_INTERVAL_SECS, FLUSH_INTERVAL_SECS,
+                TimeUnit.SECONDS);
 
     }
 
@@ -65,6 +70,7 @@ public class ParquetArchiver {
         buffers.compute(key, (k, batch) -> {
             if (batch == null) {
                 batch = new ArrayList<>();
+                batchStartTimes.putIfAbsent(k, System.currentTimeMillis());
             }
             batch.add(record);
             logger.debug("Batch size now: {}/{}", batch.size(), BATCH_SIZE);
@@ -72,6 +78,7 @@ public class ParquetArchiver {
             if (batch.size() >= BATCH_SIZE) {
                 logger.info("Batch full! Flushing partition: {}", key.getPathString());
                 batchToFlushRef.set(batch);
+                batchStartTimes.remove(k);
                 return null; // removes the batch with key k from the map
             }
             return batch;
@@ -82,30 +89,32 @@ public class ParquetArchiver {
         }
     }
 
-    // Called by background thread — scans for stale hour buckets
+    // Called by background thread — flushes stale hour buckets and batches older than FLUSH_INTERVAL_SECS
     private void flushStalePartitions() {
-        // iterate over buffers
-        // extract each key
         try {
-            logger.info("STALE_FLUSH: Checking for stale partitions...");
+            logger.debug("STALE_FLUSH: Checking for stale or timed-out partitions...");
             String currentHourBucket = TimeBucketExtractor.getTimeBucketFromSeconds(Instant.now().getEpochSecond())
                     .toString();
-            logger.info("STALE_FLUSH: Current hour bucket: {}", currentHourBucket);
-            logger.info("STALE_FLUSH: Total partitions in buffer: {}", buffers.size());
+            long now = System.currentTimeMillis();
+            long maxAgeMs = FLUSH_INTERVAL_SECS * 1000L;
 
             buffers.forEach((key, batch) -> {
-                if (!key.getCurrentHourBucket().equals(currentHourBucket)) {
+                Long startTime = batchStartTimes.get(key);
+                boolean isPreviousHour = !key.getCurrentHourBucket().equals(currentHourBucket);
+                boolean isTimedOut = startTime != null && (now - startTime) >= maxAgeMs;
+
+                if (isPreviousHour || isTimedOut) {
                     AtomicReference<List<StatusMessage>> staleBatchRef = new AtomicReference<>();
                     buffers.computeIfPresent(key, (k, currBatch) -> {
                         staleBatchRef.set(currBatch);
+                        batchStartTimes.remove(k);
                         return null; // remove stale batch from map
                     });
                     // Flush happens OUTSIDE the map lock so we don't block other threads
                     if (staleBatchRef.get() != null && !staleBatchRef.get().isEmpty()) {
-                        logger.warn("STALE_FLUSH: Flushing {} records from stale partition: {}",
-                                staleBatchRef.get().size(), key.getPathString());
+                        logger.info("STALE_FLUSH: Flushing {} records from partition {} (previousHour={}, timedOut={})",
+                                staleBatchRef.get().size(), key.getPathString(), isPreviousHour, isTimedOut);
                         flush(key, staleBatchRef.get());
-
                     }
                 }
 
@@ -115,22 +124,20 @@ public class ParquetArchiver {
         }
     }
 
-    // Flushes one specific partition to disk
+    // Flushes one specific partition to disk atomically via .tmp -> .parquet
     private void flush(PartitionKey key, List<StatusMessage> batch) {
-        // 1. Convert batch to Parquet format (using Avro schema)
-        // 2. Write to path: baseOutputPath/key.getPathString()/timestamp.parquet
-        // (timestamp can be current time or max timestamp in batch)
+        java.nio.file.Path tmpLocalPath = null;
         try {
             java.nio.file.Path localDirPath = Paths.get(baseOutputPath, key.getPathString());
             logger.info("Creating directories: {}", localDirPath);
             Files.createDirectories(localDirPath);
             String fileName = "weather_data_" + UUID.randomUUID() + ".parquet";
-            Path parquetFilePath = new Path(localDirPath.toString(), fileName);
-            logger.info("Writing parquet file: {}", parquetFilePath);
-            // try-with-resources statement. No need to explicitly close the writer after
-            // curly braces execute.
+            tmpLocalPath = localDirPath.resolve(fileName + ".tmp");
+            java.nio.file.Path finalLocalPath = localDirPath.resolve(fileName);
+            Path tmpParquetPath = new Path(tmpLocalPath.toString());
+            logger.info("Writing temporary parquet file: {}", tmpParquetPath);
             try (ParquetWriter<StatusMessage> writer = AvroParquetWriter.<StatusMessage>builder(
-                    HadoopOutputFile.fromPath(parquetFilePath, hadoopConf))
+                    HadoopOutputFile.fromPath(tmpParquetPath, hadoopConf))
                     .withSchema(StatusMessage.getClassSchema())
                     .withCompressionCodec(CompressionCodecName.SNAPPY)
                     .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
@@ -138,11 +145,19 @@ public class ParquetArchiver {
                 for (StatusMessage record : batch) {
                     writer.write(record);
                 }
-                logger.info("Successfully flushed {} records to {}", batch.size(), parquetFilePath);
             }
-        } catch (IOException e) { // catch all to prevent background thread from dying. We log the error and move
-                                  // on, but in a real system we might want to implement retries or alerting here.
+            Files.move(tmpLocalPath, finalLocalPath,
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("Successfully flushed and committed {} records to {}", batch.size(), finalLocalPath);
+        } catch (IOException e) {
             logger.error("Error while flushing partition " + key.getPathString() + ": ", e);
+            if (tmpLocalPath != null) {
+                try {
+                    Files.deleteIfExists(tmpLocalPath);
+                } catch (IOException cleanupEx) {
+                    logger.warn("Failed to clean up temp file {}: {}", tmpLocalPath, cleanupEx.getMessage());
+                }
+            }
         }
     }
 

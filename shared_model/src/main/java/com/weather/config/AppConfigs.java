@@ -122,6 +122,16 @@ public class AppConfigs {
         }
     }
 
+    public static int getParquetFlushIntervalSecs() {
+        String interval = System.getenv("PARQUET_FLUSH_INTERVAL_SECS");
+        try {
+            return interval != null ? Integer.parseInt(interval) : 30;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid PARQUET_FLUSH_INTERVAL_SECS value, using default: 30");
+            return 30;
+        }
+    }
+
     public static int getDiskFlushThreshold() {
         String threshold = System.getenv("DISK_FLUSH_THRESHOLD");
         try {
