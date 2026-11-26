@@ -13,3 +13,21 @@ Dockerfile.stream.minimal
 
 # Minikube binary
 minikube-linux-amd64
+docs/architecture_edited_again.excalidraw
+docs/architecture_edited.excalidraw
+docs/architecture.excalidraw
+docs/architecture.png
+docs/system_architecture.svg
+.opencode/skills/excalidraw-skill/SKILL.md
+.opencode/skills/excalidraw-skill/evals/evals.json
+.opencode/skills/excalidraw-skill/references/cheatsheet.md
+2026-11-19_DRIFT_REPORT.md
+comprehension_report.md
+critic_report.md
+DESIGN_SPEC.md
+generate_data_flow_svg.py
+data_flow.svg
+goldfish_review_report.md
+Project.pdf
+intermediate_zoom_out_report.md
+zoom_out_report.md

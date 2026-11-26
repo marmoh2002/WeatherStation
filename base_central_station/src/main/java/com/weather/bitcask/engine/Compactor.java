@@ -13,7 +13,6 @@ import java.io.EOFException;
 import java.io.IOException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import java.time.Instant;
 import com.weather.bitcask.model.DataEntry;
 
 import java.nio.file.Files;
@@ -57,7 +56,7 @@ public class Compactor {
         }
     }
 
-    private void compact() {
+    public synchronized void compact() {
         logger.info("Starting compaction process...");
 
         List<SegmentFile> segmentsToCompact = new ArrayList<>(store.getClosedSegments());
@@ -69,6 +68,7 @@ public class Compactor {
         segmentsToCompact.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
         // Create new segment file for compacted data
         SegmentFile newSegment = null;
+        boolean replaced = false;
 
         Set<Long> oldIds = segmentsToCompact.stream()
                 .map(SegmentFile::getSegmentId)
@@ -79,7 +79,8 @@ public class Compactor {
         Map<Long, Integer> writtenValueSizes = new HashMap<>();
 
         try {
-            newSegment = new SegmentFile(store.segmentPath(Instant.now().toEpochMilli()), true);
+            long newSegmentId = store.nextSegmentId();
+            newSegment = new SegmentFile(store.segmentPath(newSegmentId), true, store.getMaxSegmentSizeBytes());
             // Read all entries from segments to compact and keep only the latest for each
             // key
             for (SegmentFile segment : segmentsToCompact) {
@@ -149,44 +150,64 @@ public class Compactor {
                 }
             }
             // Write hint file for the new compacted segment
-            try (HintFile hintFile = new HintFile(store.hintPath(newSegment.getSegmentId()))) {
+            try (HintFile hintFile = new HintFile(store.hintPath(newSegmentId))) {
                 for (long key : writtenOffsets.keySet()) {
                     hintFile.appendHint(new HintEntry(
                             key,
-                            newSegment.getSegmentId(),
+                            newSegmentId,
                             writtenOffsets.get(key),
                             writtenValueSizes.get(key)));
                 }
             }
             // Atomically update index and swap segments
             Map<Long, SegmentFile> newSegments = new HashMap<>();
-            newSegments.put(newSegment.getSegmentId(), newSegment);
+            newSegments.put(newSegmentId, newSegment);
+
+            store.registerSegments(newSegments);
 
             for (long key : writtenOffsets.keySet()) {
                 DirEntry newEntry = new DirEntry(
-                        newSegment.getSegmentId(),
+                        newSegmentId,
                         writtenOffsets.get(key),
                         writtenValueSizes.get(key));
                 store.updateIndexIfNewer(key, newEntry, oldIds);
             }
 
             store.replaceSegments(oldIds, newSegments);
+            replaced = true;
+
+            try {
+                newSegment.closeWriter();
+                logger.info("Closed writer for new compacted segment file: {}", newSegmentId);
+            } catch (IOException e) {
+                logger.error("Error closing writer for new compacted segment {}", newSegmentId, e);
+            }
+
+            for (SegmentFile oldSegment : segmentsToCompact) {
+                try {
+                    oldSegment.close();
+                } catch (IOException e) {
+                    logger.error("Error closing compacted old segment {}", oldSegment.getSegmentId(), e);
+                }
+            }
 
             for (Long oldId : oldIds) {
                 Files.deleteIfExists(store.segmentPath(oldId));
                 Files.deleteIfExists(store.hintPath(oldId));
             }
-            logger.info("closed new segment file after compaction: {}", newSegment.getSegmentId());
 
             logger.info("Compaction done. New segment: {}, removed: {}",
-                    newSegment.getSegmentId(), oldIds);
+                    newSegmentId, oldIds);
 
         } catch (Throwable t) {
             logger.error("Unexpected error during compaction", t);
         } finally {
-            if (newSegment != null) {
+            if (newSegment != null && !replaced) {
                 try {
+                    store.removeSegment(newSegment.getSegmentId());
                     newSegment.close();
+                    Files.deleteIfExists(newSegment.getFilePath());
+                    Files.deleteIfExists(store.hintPath(newSegment.getSegmentId()));
                 } catch (IOException e) {
                     logger.error("Error closing new segment during compaction cleanup", e);
                 }

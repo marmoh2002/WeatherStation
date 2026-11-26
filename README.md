@@ -151,11 +151,24 @@ kubectl delete -f k8s/
 
 ## Querying live state (BitCask HTTP & CLI)
 
-`BitCaskServer` listens on port `8080` and serves two `GET` endpoints directly from the in-memory keydir + `.data` segments:
+`BitCaskServer` listens on port `8080` and serves `GET` endpoints directly from the in-memory `ConcurrentHashMap` index (`inMemoryIndex`) and open `.data` `SegmentFile` readers, returning `Content-Type: text/plain; charset=UTF-8` with explicit UTF-8 encoding:
+
+| Request | Status | Response |
+| :--- | :--- | :--- |
+| `GET /view-key?id=101` (or `?foo=1&id=101`) | `200 OK` | `StatusMessage` string from active, sealed, or compacted segment |
+| `GET /view-key?id=99999` (absent key) | `404 Not Found` | `Key Not Found` |
+| `GET /view-key`, `/view-key?id=`, `/view-key?id=abc` | `400 Bad Request` | `Missing ID parameter` or `Invalid ID format` |
+| `GET /view-all` | `200 OK` | Newline-delimited `key,StatusMessage` lines for all indexed keys |
+| Non-`GET` request to either endpoint | `405 Method Not Allowed` | `Method Not Allowed` |
+
+Query parameters are decoded from the raw query string (`&`-delimited pairs split at the first `=`), so extra parameters before or after `id` work and empty/missing values return `400` safely.
 
 ```bash
 # Latest reading for station 101
 curl -s "http://localhost:8080/view-key?id=101"
+
+# Extra parameters in any order work
+curl -s "http://localhost:8080/view-key?foo=1&id=101"
 
 # CSV dump (key,StatusMessage) of all stations
 curl -s "http://localhost:8080/view-all"
@@ -168,6 +181,41 @@ Use [`bitcask_client.sh`](./bitcask_client.sh) to query, export timestamped CSVs
 ./bitcask_client.sh -view-all
 ./bitcask_client.sh -n=50
 ```
+
+---
+
+## BitCask storage engine internals
+
+[`BitCaskStore`](./base_central_station/src/main/java/com/weather/bitcask/engine/BitCaskStore.java), [`SegmentFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/SegmentFile.java), [`HintFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/HintFile.java), and [`Compactor`](./base_central_station/src/main/java/com/weather/bitcask/engine/Compactor.java) implement an append-only log-structured key-value store:
+
+- **Record layout (`SegmentFile`)**: Each entry writes a 24-byte header (`4B CRC32` + `8B timestamp` + `8B key` + `4B valueSize`) followed by the Avro binary `StatusMessage` payload. `readEntry(offset)` and startup recovery verify CRC32 checksums on read.
+- **Active segment rotation (`BitCaskStore.put`)**:
+  - When `currentOffset >= MAX_SEGMENT_SIZE_KB * 1024`, rotation allocates a strictly monotonic segment ID via `Math.max(Instant.now().toEpochMilli(), currentSegmentId + 1)` so rapid rotations within the same millisecond never collide on `datafile_<id>.data`.
+  - The new active `SegmentFile` is opened before sealing the old segment with `closeWriter()`, which flushes and closes only the `DataOutputStream` writer while keeping the `RandomAccessFile` reader open in `segmentFilesById` for `/view-key` and `store.get()` lookups.
+  - A `.hint` file (`key`, `segmentId`, `offset`, `valueSize`) is written best-effort in a `try-with-resources` block; if `.hint` creation fails, the error is logged without leaving `activeSegment` null or closed, and startup recovery (`recoverSegmentsWithoutHints()`) rebuilds missing hint files by scanning `.data` records and truncating any torn tail.
+- **Compaction (`Compactor.compact`)**:
+  - Triggered periodically (`COMPACTION_INTERVAL_MINS`, default `3` min) when at least two closed segments exist.
+  - Streams only live records (matching `inMemoryIndex` segment ID and offset) whose CRC32 validates into a new monotonic segment file and writes its `.hint` file.
+  - Registers the compacted segment, atomically updates `inMemoryIndex` via `updateIndexIfNewer()` (preserving newer active writes), swaps segment maps via `replaceSegments()`, and then calls `newSegment.closeWriter()` so reads against the compacted segment stay open.
+  - Closes old `SegmentFile` handles in `segmentsToCompact` before deleting their `.data` and `.hint` files so file descriptors are not leaked. If compaction aborts or throws before `replaceSegments()`, `newSegment` is closed completely and its uncommitted `.data`/`.hint` files are deleted.
+
+---
+
+## Testing
+
+JUnit 4 unit and HTTP integration tests live in `base_central_station` (and `shared_model`). Because `base_central_station` depends on `com.weather:shared_model:1.0-SNAPSHOT`, install `shared_model` to your local Maven repository first if schema or `AppConfigs` changes haven't been installed yet:
+
+```bash
+# Install parent POM and shared_model locally
+mvn -pl shared_model -am install
+
+# Run base_central_station test suite
+cd base_central_station && mvn test
+```
+
+Test coverage in `base_central_station`:
+- [`BitCaskStoreTest`](./base_central_station/src/test/java/com/weather/bitcask/engine/BitCaskStoreTest.java): verifies `store.get(key)` reads from sealed segments after sub-millisecond rotations with strictly monotonic segment IDs, rotation resilience when `.hint` file creation fails, `Compactor.compact()` merging multiple closed segments while preserving live reads and disk recovery, and clean abort cleanup when a segment read fails before `replaceSegments()`.
+- [`BitCaskServerTest`](./base_central_station/src/test/java/com/weather/bitcask/server/BitCaskServerTest.java): runs an embedded `BitCaskServer` on an ephemeral port and checks `200` responses across active, sealed, and compacted segments (including extra query parameters like `?foo=1&id=101`), `404` for unknown keys, `400` for missing/empty/malformed `id` queries, `405` for non-`GET` methods, `/view-all`, and UTF-8 `Content-Type` headers.
 
 ---
 
@@ -215,12 +263,15 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 ```text
 .
 ├── base_central_station/         # Consumer, pipeline, BitCask KV + HTTP server, Parquet archiver
-│   └── src/main/java/com/weather/
-│       ├── Main.java             # Wires store, archiver, pipeline, compactor, API server, consumer
-│       ├── archive/              # ParquetArchiver, PartitionKey, TimeBucketExtractor
-│       ├── bitcask/              # BitCaskStore, Compactor, SegmentFile, HintFile, BitCaskServer
-│       ├── consumer/             # BaseStationConsumer, ConsumerLoop, SafeStatusMessageDeserializer
-│       └── pipeline/             # Pipeline (gap synthesis, backpressure, async Parquet queue)
+│   ├── src/main/java/com/weather/
+│   │   ├── Main.java             # Wires store, archiver, pipeline, compactor, API server, consumer
+│   │   ├── archive/              # ParquetArchiver, PartitionKey, TimeBucketExtractor
+│   │   ├── bitcask/              # BitCaskStore, Compactor, SegmentFile, HintFile, BitCaskServer
+│   │   ├── consumer/             # BaseStationConsumer, ConsumerLoop, SafeStatusMessageDeserializer
+│   │   └── pipeline/             # Pipeline (gap synthesis, backpressure, async Parquet queue)
+│   └── src/test/java/com/weather/bitcask/
+│       ├── engine/BitCaskStoreTest.java
+│       └── server/BitCaskServerTest.java
 ├── my_producer/                  # Weather station simulator and Kafka Avro producer
 ├── my_stream/                    # Kafka Streams humidity > 70% alert processor
 ├── parquet_es_indexer/           # Parquet scanner, SHA-256 ledger, mapper, Elasticsearch bulk indexer

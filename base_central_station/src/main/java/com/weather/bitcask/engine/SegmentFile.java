@@ -21,24 +21,48 @@ import java.io.DataInputStream;
 public class SegmentFile implements Closeable {
     private final Path filePath;
     private long currentOffset = 0;
-    private final DataOutputStream writer;
-    private final RandomAccessFile reader;
+    private DataOutputStream writer;
+    private RandomAccessFile reader;
     private boolean isActive = false;
+    private final long maxSegmentSizeBytes;
     private static final int FLUSH_THRESHOLD = AppConfigs.getDiskFlushThreshold();
     public static final int HEADER_SIZE = Integer.BYTES + Long.BYTES + Long.BYTES + Integer.BYTES; // 24 bytes: CRC32(4) + Timestamp(8) + Key(8) + ValSize(4)
     private int writesSinceFlush = 0;
     private static final Logger logger = LogManager.getLogger(SegmentFile.class);
 
     public SegmentFile(Path filePath, boolean isActive) throws Exception {
+        this(filePath, isActive, -1L);
+    }
+
+    public SegmentFile(Path filePath, boolean isActive, long maxSegmentSizeBytes) throws Exception {
         logger.info("Creating SegmentFile at path: {}, isActive: {}", filePath, isActive);
+        this.filePath = filePath;
+        this.maxSegmentSizeBytes = maxSegmentSizeBytes;
+        DataOutputStream openedWriter = null;
+        RandomAccessFile openedReader = null;
         try {
-            this.filePath = filePath;
-            this.writer = isActive ? new DataOutputStream(new FileOutputStream(filePath.toFile(), true)) : null; // append
+            openedWriter = isActive ? new DataOutputStream(new FileOutputStream(filePath.toFile(), true)) : null; // append
             this.currentOffset = filePath.toFile().length();
-            this.reader = new RandomAccessFile(filePath.toFile(), "r");
+            openedReader = new RandomAccessFile(filePath.toFile(), "r");
+            this.writer = openedWriter;
+            this.reader = openedReader;
             this.isActive = isActive;
 
         } catch (Exception e) {
+            if (openedWriter != null) {
+                try {
+                    openedWriter.close();
+                } catch (IOException closeEx) {
+                    e.addSuppressed(closeEx);
+                }
+            }
+            if (openedReader != null) {
+                try {
+                    openedReader.close();
+                } catch (IOException closeEx) {
+                    e.addSuppressed(closeEx);
+                }
+            }
             logger.error("Error occurred while creating SegmentFile", e);
             throw new Exception("Failed to create SegmentFile", e);
         }
@@ -66,11 +90,18 @@ public class SegmentFile implements Closeable {
 
     public DataEntry readEntry(long offset) throws IOException {
         synchronized (this) {
+            if (reader == null) {
+                throw new IOException("Segment reader is closed: " + filePath);
+            }
             reader.seek(offset);
             int crc = reader.readInt();
             long timestamp = reader.readLong();
             long key = reader.readLong();
             int valueSize = reader.readInt();
+            if (valueSize < 0) {
+                throw new IOException(
+                        "Corrupted record detected at offset " + offset + " (negative valueSize " + valueSize + ")");
+            }
             byte[] value = new byte[valueSize];
             reader.readFully(value);
 
@@ -139,7 +170,8 @@ public class SegmentFile implements Closeable {
     }
 
     public boolean isFull() {
-        return currentOffset >= AppConfigs.getMaxSegmentSize();
+        long limit = maxSegmentSizeBytes >= 0 ? maxSegmentSizeBytes : AppConfigs.getMaxSegmentSize();
+        return currentOffset >= limit;
     }
 
     public boolean isActive() {
@@ -148,22 +180,50 @@ public class SegmentFile implements Closeable {
 
     public void closeWriter() throws IOException {
         if (writer != null) {
-            writer.flush();
-            writer.close();
+            try {
+                writer.flush();
+            } finally {
+                try {
+                    writer.close();
+                } finally {
+                    writer = null;
+                    isActive = false;
+                }
+            }
         }
         // reader stays open
     }
 
-    public void closeReader() throws IOException {
+    public synchronized void closeReader() throws IOException {
         if (reader != null) {
-            reader.close();
+            try {
+                reader.close();
+            } finally {
+                reader = null;
+            }
         }
     }
 
     @Override
     public void close() throws IOException {
-        closeWriter();
-        closeReader();
+        IOException firstException = null;
+        try {
+            closeWriter();
+        } catch (IOException e) {
+            firstException = e;
+        }
+        try {
+            closeReader();
+        } catch (IOException e) {
+            if (firstException != null) {
+                firstException.addSuppressed(e);
+            } else {
+                firstException = e;
+            }
+        }
+        if (firstException != null) {
+            throw firstException;
+        }
     }
 
     public record EntryHeader(long crc32, long timestamp, long key, int valueSize, long offset) {
