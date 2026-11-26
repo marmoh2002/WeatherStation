@@ -21,7 +21,7 @@ Built as a five-module Java 21 Maven platform, the system pairs real-time stream
 
 ### What happens on every reading
 
-1. **Telemetry generation (`my_producer`)**: Each producer picks a random `station_id` (`0..999`) at startup and emits one Avro `StatusMessage` per second to `weather-stations` (with a 10% simulated packet drop), registering schemas with Confluent Schema Registry (`:8081`).
+1. **Telemetry generation (`my_producer`)**: On startup, `StationIdAllocator` allocates a strictly monotonic `station_id` (`1, 2, 3, ...`) shared across containers and restarts by appending a registration marker to partition `0` of the single-partition `weather-station-ids` Kafka topic (`offset + 1`), or honors a `STATION_ID` env override. Each producer then emits one Avro `StatusMessage` per second to `weather-stations` (with a 10% simulated packet drop), registering schemas with Confluent Schema Registry (`:8081`).
 2. **Real-time rain alerting (`my_stream`)**: `WarningApp` consumes `weather-stations` with `SpecificAvroSerde`, filters events where `weather != null` and `humidity > 70%`, serializes structured JSON alerts, and publishes them to `rain-alerts`.
 3. **Resilient central ingestion (`base_central_station`)**:
    - **Dead-letter isolation**: `SafeStatusMessageDeserializer` catches deserialization errors and attaches `dlq-error` and `dlq-raw-payload` headers so `ConsumerLoop` routes bad payloads to `weather-dead-letter` instead of crashing polling.
@@ -42,7 +42,7 @@ Built as a five-module Java 21 Maven platform, the system pairs real-time stream
 | Module / Component | Stack | Role | Key Files |
 | :--- | :--- | :--- | :--- |
 | **`shared_model`** | Java 21 / Avro | Shared `StatusMessage.avsc` contract (`SpecificRecord`) and env-backed `AppConfigs` | [StatusMessage.avsc](./shared_model/src/main/resources/avro/StatusMessage.avsc), [AppConfigs.java](./shared_model/src/main/java/com/weather/config/AppConfigs.java) |
-| **`my_producer`** | Java 21 / Kafka Client | Simulates weather station readings (1s interval, 10% simulated drops) | [Main.java](./my_producer/src/main/java/com/weather/my_prod/Main.java), [ProducerLoop.java](./my_producer/src/main/java/com/weather/my_prod/ProducerLoop.java) |
+| **`my_producer`** | Java 21 / Kafka Client | Simulates weather station readings (1s interval, 10% simulated drops) with monotonic station IDs | [Main.java](./my_producer/src/main/java/com/weather/my_prod/Main.java), [ProducerLoop.java](./my_producer/src/main/java/com/weather/my_prod/ProducerLoop.java), [StationIdAllocator.java](./my_producer/src/main/java/com/weather/my_prod/StationIdAllocator.java) |
 | **`my_stream`** | Java 21 / Kafka Streams | Filters `humidity > 70%` and emits JSON alerts to `rain-alerts` | [WarningApp.java](./my_stream/src/main/java/com/weather/my_stream/WarningApp.java) |
 | **`base_central_station`** | Java 21 / BitCask + Parquet | Kafka consumer (DLQ + backpressure), gap detector, BitCask KV engine + HTTP `:8080`, Parquet archiver | [Main.java](./base_central_station/src/main/java/com/weather/Main.java), [Pipeline.java](./base_central_station/src/main/java/com/weather/pipeline/Pipeline.java), [BitCaskStore.java](./base_central_station/src/main/java/com/weather/bitcask/engine/BitCaskStore.java), [ParquetArchiver.java](./base_central_station/src/main/java/com/weather/archive/engine/ParquetArchiver.java) |
 | **`parquet_es_indexer`** | Java 21 / ES Java Client | Polls Parquet partitions, tracks SHA-256 file ledger, bulk-indexes Elasticsearch | [IndexerMain.java](./parquet_es_indexer/src/main/java/com/weather/indexer/IndexerMain.java), [ElasticsearchBulkIndexer.java](./parquet_es_indexer/src/main/java/com/weather/indexer/ElasticsearchBulkIndexer.java) |
@@ -209,11 +209,12 @@ JUnit 4 unit and HTTP integration tests live in `base_central_station` (and `sha
 # Install parent POM and shared_model locally
 mvn -pl shared_model -am install
 
-# Run base_central_station test suite
-cd base_central_station && mvn test
+# Run producer and central station test suites
+mvn -pl my_producer,base_central_station test
 ```
 
-Test coverage in `base_central_station`:
+Test coverage:
+- [`StationIdAllocatorTest`](./my_producer/src/test/java/com/weather/my_prod/StationIdAllocatorTest.java) & [`ProducerLoopTest`](./my_producer/src/test/java/com/weather/my_prod/ProducerLoopTest.java): verify monotonic `1, 2, 3, ...` station ID allocation across sequential/concurrent containers via partition `0`, `STATION_ID` override parsing and bypass behavior, transient topic-creation retries, and `ProducerLoop` emission with the allocated ID.
 - [`BitCaskStoreTest`](./base_central_station/src/test/java/com/weather/bitcask/engine/BitCaskStoreTest.java): verifies `store.get(key)` reads from sealed segments after sub-millisecond rotations with strictly monotonic segment IDs, rotation resilience when `.hint` file creation fails, `Compactor.compact()` merging multiple closed segments while preserving live reads and disk recovery, and clean abort cleanup when a segment read fails before `replaceSegments()`.
 - [`BitCaskServerTest`](./base_central_station/src/test/java/com/weather/bitcask/server/BitCaskServerTest.java): runs an embedded `BitCaskServer` on an ephemeral port and checks `200` responses across active, sealed, and compacted segments (including extra query parameters like `?foo=1&id=101`), `404` for unknown keys, `400` for missing/empty/malformed `id` queries, `405` for non-`GET` methods, `/view-all`, and UTF-8 `Content-Type` headers.
 
@@ -237,6 +238,8 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 | `KAFKA_BROKER` | `localhost:9092` | `kafka:9092` | Kafka bootstrap servers |
 | `SCHEMA_REGISTRY_URL` | `http://schema-registry:8081` | `http://schema-registry:8081` | Confluent Schema Registry URL |
 | `KAFKA_PRODUCER_TOPIC` | `weather-stations` | `weather-stations` | Producer target topic |
+| `STATION_ID` | unset (dynamic via Kafka) | unset | Optional pinned non-negative station ID override for a producer instance |
+| `STATION_ID_TOPIC` | `weather-station-ids` | `weather-station-ids` | Single-partition Kafka coordination topic for monotonic station ID allocation |
 | `KAFKA_WARNING_INPUT_TOPIC` | `weather-stations` | `weather-stations` | Kafka Streams input topic |
 | `KAFKA_WARNING_OUTPUT_TOPIC` | `rain-alerts` | `rain-alerts` | Kafka Streams JSON alert topic |
 | `KAFKA_HUMIDITY_THRESHOLD` | `70` | `70` | Rain alert humidity cutoff (%) |
@@ -273,6 +276,14 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 │       ├── engine/BitCaskStoreTest.java
 │       └── server/BitCaskServerTest.java
 ├── my_producer/                  # Weather station simulator and Kafka Avro producer
+│   ├── src/main/java/com/weather/my_prod/
+│   │   ├── Main.java
+│   │   ├── Producer.java
+│   │   ├── ProducerLoop.java
+│   │   └── StationIdAllocator.java
+│   └── src/test/java/com/weather/my_prod/
+│       ├── ProducerLoopTest.java
+│       └── StationIdAllocatorTest.java
 ├── my_stream/                    # Kafka Streams humidity > 70% alert processor
 ├── parquet_es_indexer/           # Parquet scanner, SHA-256 ledger, mapper, Elasticsearch bulk indexer
 ├── shared_model/                 # StatusMessage.avsc schema and AppConfigs

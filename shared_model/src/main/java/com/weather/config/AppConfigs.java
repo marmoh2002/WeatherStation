@@ -5,6 +5,7 @@ public class AppConfigs {
     // producer
     public static final String producerApplicationID = "ProducerApp";
     public static final String producerTopicName = "weather-stations";
+    public static final String stationIdTopicName = "weather-station-ids";
 
     public static String getSchemaRegistryUrl() {
         return System.getenv("SCHEMA_REGISTRY_URL") != null ? System.getenv("SCHEMA_REGISTRY_URL")
@@ -17,6 +18,35 @@ public class AppConfigs {
             return producerTopicName;
         }
         return topic;
+    }
+
+    public static String getStationIdTopicName() {
+        String topic = System.getenv("STATION_ID_TOPIC");
+        if (topic == null || topic.isBlank()) {
+            return stationIdTopicName;
+        }
+        return topic.trim();
+    }
+
+    public static Long getStationIdOverride() {
+        return parseStationIdOverride(System.getenv("STATION_ID"));
+    }
+
+    public static Long parseStationIdOverride(String rawStationId) {
+        if (rawStationId == null || rawStationId.isBlank()) {
+            return null;
+        }
+        try {
+            long parsed = Long.parseLong(rawStationId.trim());
+            if (parsed < 0) {
+                System.err.println("Invalid negative STATION_ID value '" + rawStationId + "', ignoring override.");
+                return null;
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            System.err.println("Invalid STATION_ID value '" + rawStationId + "', ignoring override.");
+            return null;
+        }
     }
 
     public static String getProducerApplicationID() {
