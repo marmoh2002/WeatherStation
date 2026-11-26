@@ -202,7 +202,6 @@ networks:
 volumes:
   parquet-shared-storage:
   bitcask-shared-storage:
-  csv-shared-storage:
   indexer-state-storage:
   es-data:
   kafka-data:

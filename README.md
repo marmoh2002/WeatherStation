@@ -33,7 +33,18 @@ Built as a five-module Java 21 Maven platform, the system pairs real-time stream
 5. **Search & dashboards (`parquet_es_indexer` -> Elasticsearch -> Kibana)**:
    - `IndexerMain` polls `/app/parquet_output` (`:ro`) every `30s`, tracks processed files by path, mtime, and SHA-256 in `/app/state/indexed-files.txt` so files aren't indexed twice, maps records (`docId = <station_id>_<s_no>`, ISO-8601 `@timestamp`), and bulk-indexes `500` docs per batch into `weather-status` (`:9200`), backing Kibana (`:5601`).
 
-> **Scope notes**: `rain-alerts` and `weather-dead-letter` are produced by services in this repository, though downstream consumers aren't implemented here. `csv-shared-storage` is declared in [docker-compose.yml](./docker-compose.yml) and [k8s/volumes.yaml](./k8s/volumes.yaml), but no container mounts it.
+### Monotonic station ID allocation (`my_producer`)
+
+![Monotonic Station ID Allocation](./docs/monotonic_station_id.svg)
+
+Multiple producer containers or Kubernetes replicas (`replicas: 10`) can start concurrently or restart at any time. Rather than picking random station IDs (which risk collisions in `Pipeline.lastSeenSNo` and `BitCaskStore`) or adding a separate coordination store, [`StationIdAllocator`](./my_producer/src/main/java/com/weather/my_prod/StationIdAllocator.java) uses a single-partition Kafka topic as a durable atomic counter:
+
+1. **Optional static pin (`STATION_ID`)**: If `STATION_ID` is set to a non-negative integer, [`AppConfigs.parseStationIdOverride()`](./shared_model/src/main/java/com/weather/config/AppConfigs.java) returns it immediately and skips Kafka coordination.
+2. **Single-partition topic setup**: Otherwise, `AdminClient` creates (or verifies) the `weather-station-ids` topic (`STATION_ID_TOPIC`) with `1` partition and infinite retention (`retention.ms=-1`, `retention.bytes=-1`), ignoring `TopicExistsException` when replicas boot simultaneously.
+3. **Serialized offset assignment**: A short-lived idempotent `KafkaProducer<byte[], byte[]>` (`acks=all`, `enable.idempotence=true`, bypassing Schema Registry) appends one registration marker to partition `0` and awaits `RecordMetadata`. Because the broker serializes all writes to partition `0`, every container receives a unique, strictly increasing offset (`0, 1, 2, ...`) persisted across restarts, mapped to **`station_id = offset + 1`** (`1, 2, 3, ...`). Transient startup errors retry up to `5` times (`1s` backoff) before failing fast.
+4. **Telemetry emission**: [`ProducerLoop`](./my_producer/src/main/java/com/weather/my_prod/ProducerLoop.java) retains that assigned `station_id` as both the Kafka record key and `StatusMessage.station_id` when emitting readings to `weather-stations` every second.
+
+> **Scope notes**: `rain-alerts` and `weather-dead-letter` are produced by services in this repository, though downstream consumers aren't implemented here.
 
 ---
 
@@ -288,6 +299,8 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 ├── parquet_es_indexer/           # Parquet scanner, SHA-256 ledger, mapper, Elasticsearch bulk indexer
 ├── shared_model/                 # StatusMessage.avsc schema and AppConfigs
 ├── docs/
+│   ├── monotonic_station_id.excalidraw
+│   ├── monotonic_station_id.svg
 │   └── system_architecture_ref.svg
 ├── k8s/                          # Kubernetes deployments, services, PVCs, ConfigMap, deploy-all.sh
 ├── bitcask_client.sh             # Bash HTTP client for BitCaskServer (:8080)

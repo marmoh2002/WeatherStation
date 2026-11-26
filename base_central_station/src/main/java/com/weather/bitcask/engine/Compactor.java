@@ -65,13 +65,13 @@ public class Compactor {
             return;
         }
         // Sort segments by ID (oldest first)
-        segmentsToCompact.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
+        segmentsToCompact.sort(Comparator.comparingLong(segment -> segment.getSegmentId()));
         // Create new segment file for compacted data
         SegmentFile newSegment = null;
         boolean replaced = false;
 
         Set<Long> oldIds = segmentsToCompact.stream()
-                .map(SegmentFile::getSegmentId)
+                .map(segment -> segment.getSegmentId())
                 .collect(Collectors.toSet());
 
         Map<Long, Long> writtenOffsets = new HashMap<>();

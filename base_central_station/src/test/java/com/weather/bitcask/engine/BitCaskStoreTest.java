@@ -54,7 +54,7 @@ public class BitCaskStoreTest {
 
             // Verify segment IDs are strictly monotonic and sealed segments keep readers open
             List<Long> allSegmentIds = closedSegments.stream()
-                    .map(SegmentFile::getSegmentId)
+                    .map(segment -> segment.getSegmentId())
                     .sorted()
                     .collect(Collectors.toList());
             for (int i = 1; i < allSegmentIds.size(); i++) {
@@ -141,7 +141,7 @@ public class BitCaskStoreTest {
             List<SegmentFile> closedBefore = store.getClosedSegments();
             assertTrue("Need at least 2 closed segments for compaction", closedBefore.size() >= 2);
             Set<Long> oldClosedIds = closedBefore.stream()
-                    .map(SegmentFile::getSegmentId)
+                    .map(segment -> segment.getSegmentId())
                     .collect(Collectors.toSet());
 
             Compactor compactor = new Compactor(store);
@@ -190,7 +190,7 @@ public class BitCaskStoreTest {
             }
 
             List<SegmentFile> closedBefore = store.getClosedSegments();
-            closedBefore.sort(Comparator.comparingLong(SegmentFile::getSegmentId));
+            closedBefore.sort(Comparator.comparingLong(segment -> segment.getSegmentId()));
             assertTrue(closedBefore.size() >= 2);
 
             // Delete the first closed segment's .data file so sequential read throws IOException
@@ -198,7 +198,7 @@ public class BitCaskStoreTest {
             Files.delete(brokenSegment.getFilePath());
 
             Set<Long> closedIdsBefore = closedBefore.stream()
-                    .map(SegmentFile::getSegmentId)
+                    .map(segment -> segment.getSegmentId())
                     .collect(Collectors.toSet());
 
             Compactor compactor = new Compactor(store);
@@ -206,7 +206,7 @@ public class BitCaskStoreTest {
 
             // Old segments in store must remain untouched and no aborted segment file should remain on disk
             Set<Long> closedIdsAfter = store.getClosedSegments().stream()
-                    .map(SegmentFile::getSegmentId)
+                    .map(segment -> segment.getSegmentId())
                     .collect(Collectors.toSet());
             assertEquals(closedIdsBefore, closedIdsAfter);
 
