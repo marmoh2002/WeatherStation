@@ -35,14 +35,20 @@ public class BitCaskServer {
     private ExecutorService executor;
 
     public BitCaskServer(BitCaskStore store, int port) {
+        this(
+                store,
+                port,
+                defaultPoolSize(MIN_CORE_THREADS, 2),
+                defaultPoolSize(MIN_MAX_THREADS, 4),
+                WORKER_QUEUE_CAPACITY);
+    }
+
+    BitCaskServer(BitCaskStore store, int port, int corePoolSize, int maxPoolSize, int queueCapacity) {
         this.store = store;
         try {
             this.server = HttpServer.create(new InetSocketAddress(port), 0);
             this.server.createContext("/view-all", new ViewAllHandler());
             this.server.createContext("/view-key", new ViewKeyHandler());
-            int cpus = Runtime.getRuntime().availableProcessors();
-            int corePoolSize = Math.max(MIN_CORE_THREADS, cpus * 2);
-            int maxPoolSize = Math.max(MIN_MAX_THREADS, cpus * 4);
             AtomicInteger workerId = new AtomicInteger(1);
             ThreadFactory threadFactory = runnable -> {
                 Thread thread = new Thread(runnable, "bitcask-http-worker-" + workerId.getAndIncrement());
@@ -54,13 +60,17 @@ public class BitCaskServer {
                     maxPoolSize,
                     KEEP_ALIVE_SECONDS,
                     TimeUnit.SECONDS,
-                    new ArrayBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+                    new ArrayBlockingQueue<>(queueCapacity),
                     threadFactory,
                     new ThreadPoolExecutor.AbortPolicy());
             this.server.setExecutor(this.executor);
         } catch (IOException e) {
             logger.error("Failed to start HTTP Server", e);
         }
+    }
+
+    private static int defaultPoolSize(int minThreads, int cpuMultiplier) {
+        return Math.max(minThreads, Runtime.getRuntime().availableProcessors() * cpuMultiplier);
     }
 
     public void start() {

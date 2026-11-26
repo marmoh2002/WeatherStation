@@ -10,14 +10,18 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -26,7 +30,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class BitCaskServerTest {
 
@@ -216,6 +222,107 @@ public class BitCaskServerTest {
         clients.shutdown();
         assertTrue("Client pool failed to terminate", clients.awaitTermination(5, TimeUnit.SECONDS));
         assertTrue("Unexpected errors in concurrent /view-key test: " + errors.peek(), errors.isEmpty());
+    }
+
+    @Test
+    public void testQueueSaturationRejectsFastAndRecovers() throws Exception {
+        Path boundedDir = tempDir.newFolder("bounded-server-store").toPath();
+        CountDownLatch workerBlocked = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        BitCaskStore blockingStore = new BitCaskStore(boundedDir.toString(), 96L) {
+            @Override
+            public Optional<StatusMessage> get(long stationId) {
+                if (releaseWorker.getCount() > 0) {
+                    workerBlocked.countDown();
+                    try {
+                        if (!releaseWorker.await(10, TimeUnit.SECONDS)) {
+                            throw new IllegalStateException("Timed out waiting to release blocked worker");
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("Interrupted while waiting to release blocked worker", e);
+                    }
+                }
+                return super.get(stationId);
+            }
+        };
+
+        blockingStore.put(301L, makeMessage(301L, 1L));
+        blockingStore.put(302L, makeMessage(302L, 2L));
+        blockingStore.put(303L, makeMessage(303L, 3L));
+
+        BitCaskServer boundedServer = new BitCaskServer(blockingStore, 0, 1, 1, 1);
+        boundedServer.start();
+        int boundedPort = boundedServer.getPort();
+        ThreadPoolExecutor executor = (ThreadPoolExecutor) boundedServer.getExecutor();
+        HttpClient client = HttpClient.newHttpClient();
+
+        try {
+            assertEquals(1, executor.getCorePoolSize());
+            assertEquals(1, executor.getMaximumPoolSize());
+            assertEquals(1, executor.getQueue().remainingCapacity());
+
+            CompletableFuture<HttpResponse<String>> request1 = client.sendAsync(
+                    getRequest(boundedPort, "/view-key?id=301", Duration.ofSeconds(10)),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertTrue("Worker did not block inside BitCaskStore.get",
+                    workerBlocked.await(5, TimeUnit.SECONDS));
+
+            CompletableFuture<HttpResponse<String>> request2 = client.sendAsync(
+                    getRequest(boundedPort, "/view-key?id=302", Duration.ofSeconds(10)),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+            long queueWaitDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (executor.getQueue().size() < 1 && System.nanoTime() < queueWaitDeadlineNanos) {
+                Thread.sleep(10);
+            }
+            assertEquals("Expected bounded executor queue to be full", 1, executor.getQueue().size());
+            assertEquals("Expected zero remaining queue capacity", 0, executor.getQueue().remainingCapacity());
+
+            for (int i = 0; i < 3; i++) {
+                try {
+                    HttpResponse<String> unexpected = client.send(
+                            getRequest(boundedPort, "/view-key?id=303", Duration.ofSeconds(2)),
+                            HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    fail("Expected IOException when queue saturated, but got status " + unexpected.statusCode());
+                } catch (IOException expected) {
+                    assertFalse("Request timed out instead of failing fast on rejection: " + expected,
+                            expected instanceof HttpTimeoutException);
+                }
+            }
+
+            releaseWorker.countDown();
+
+            HttpResponse<String> response1 = request1.get(5, TimeUnit.SECONDS);
+            assertEquals(200, response1.statusCode());
+            assertTrue(response1.body().contains("\"station_id\": 301"));
+            assertUtf8ContentType(response1);
+
+            HttpResponse<String> response2 = request2.get(5, TimeUnit.SECONDS);
+            assertEquals(200, response2.statusCode());
+            assertTrue(response2.body().contains("\"station_id\": 302"));
+            assertUtf8ContentType(response2);
+
+            HttpResponse<String> recoveryResponse = client.send(
+                    getRequest(boundedPort, "/view-key?id=303", Duration.ofSeconds(2)),
+                    HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            assertEquals(200, recoveryResponse.statusCode());
+            assertTrue(recoveryResponse.body().contains("\"station_id\": 303"));
+            assertUtf8ContentType(recoveryResponse);
+        } finally {
+            releaseWorker.countDown();
+            boundedServer.stop();
+            blockingStore.close();
+            client.close();
+        }
+    }
+
+    private static HttpRequest getRequest(int targetPort, String pathAndQuery, Duration timeout) {
+        return HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + targetPort + pathAndQuery))
+                .timeout(timeout)
+                .GET()
+                .build();
     }
 
     private static void assertUtf8ContentType(HttpResponse<?> response) {
