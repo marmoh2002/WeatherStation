@@ -48,6 +48,45 @@ Multiple producer containers or Kubernetes replicas (`replicas: 10`) can start c
 
 ---
 
+## Apache Kafka flow (beginner guide)
+
+![Complete Apache Kafka Flow in WeatherStation](./docs/kafka_complete_flow.svg)
+
+If you are new to Apache Kafka, think of the **Kafka Broker** (`:9092`, running in KRaft mode without ZooKeeper) as a shared, durable log of **topics** (named event channels). **Producers** append records (`key` + `value`) to topics, **Consumers** read them at their own pace without deleting them for others, and **Schema Registry** (`:8081`) acts as a central dictionary that checks and versions the Avro binary message format (`StatusMessage.avsc`) so producers and consumers stay compatible.
+
+### Kafka 101 in this project
+
+#### The 4 Kafka topics
+
+| Topic | Key Format | Value Format | Why It Exists |
+| :--- | :--- | :--- | :--- |
+| **`weather-station-ids`** (`STATION_ID_TOPIC`) | `byte[]` (random UUID) | `byte[]` (UTC timestamp) | Single-partition (`1` partition, infinite retention `-1`) counter so every booting producer gets a unique, strictly monotonic `station_id = offset + 1`. |
+| **`weather-stations`** (`KAFKA_PRODUCER_TOPIC` / `KAFKA_CONSUMER_TOPIC`) | `Long` (`station_id`) | Avro [`StatusMessage`](./shared_model/src/main/resources/avro/StatusMessage.avsc) | Primary telemetry stream carrying one weather reading per second per station. Read independently by both `my_stream` and `base_central_station`. |
+| **`rain-alerts`** (`KAFKA_WARNING_OUTPUT_TOPIC`) | `Long` (`station_id`) | `String` (JSON) | High-humidity warnings (`RAIN_TRIGGER` when `humidity > 70%`) emitted by Kafka Streams. *No downstream consumer implemented in this repo.* |
+| **`weather-dead-letter`** (`KAFKA_DEAD_LETTER_TOPIC`) | `Long` (`station_id`) | `byte[]` (raw payload) | Dead-letter queue (DLQ) that quarantines corrupted or incompatible payloads alongside a `dlq-error` header instead of crashing the main consumer. *No downstream consumer implemented in this repo.* |
+
+#### Every producer, stream processor, and consumer
+
+| Role | Class / Component | Serializers / Deserializers | Plain-English Job |
+| :--- | :--- | :--- | :--- |
+| **Producer #1 (ID Allocator)** | [`StationIdAllocator`](./my_producer/src/main/java/com/weather/my_prod/StationIdAllocator.java) | `ByteArraySerializer` (key & value, bypasses Schema Registry) | Runs once on startup (unless `STATION_ID >= 0` is pinned). Uses `AdminClient` to ensure `weather-station-ids` exists, writes one idempotent (`acks=all`) marker to partition `0`, and uses `offset + 1` as its `station_id`. |
+| **Producer #2 (Telemetry)** | [`Producer`](./my_producer/src/main/java/com/weather/my_prod/Producer.java) & [`ProducerLoop`](./my_producer/src/main/java/com/weather/my_prod/ProducerLoop.java) | `LongSerializer` + `KafkaAvroSerializer` (uses Schema Registry `:8081`) | Runs every `1s` (`10%` simulated packet drop) and publishes `StatusMessage` readings to `weather-stations`, setting `station_id` as both the Kafka record key and payload field. |
+| **Kafka Streams App** | [`WarningApp`](./my_stream/src/main/java/com/weather/my_stream/WarningApp.java) (`application.id = weather-streams`) | In: `Serdes.Long()` + `SpecificAvroSerde` (`:8081`)<br>Out: `Serdes.Long()` + `Serdes.String()` | Continuously reads `weather-stations`, filters for `weather != null && humidity > 70%`, converts matching events to JSON, and writes them to `rain-alerts`. |
+| **Main Consumer** | [`BaseStationConsumer`](./base_central_station/src/main/java/com/weather/consumer/BaseStationConsumer.java) & [`ConsumerLoop`](./base_central_station/src/main/java/com/weather/consumer/ConsumerLoop.java) (`group.id = base-station-group`) | `LongDeserializer` + [`SafeStatusMessageDeserializer`](./base_central_station/src/main/java/com/weather/consumer/SafeStatusMessageDeserializer.java) (`:8081`) | Polls `weather-stations` every `1000ms`, pauses/resumes partitions when the `Pipeline` queue (`10,000`) fills to 80% / drains to 50%, and forwards valid messages to BitCask + Parquet. |
+| **Producer #3 (DLQ)** | `BaseStationConsumer.createDeadLetterProducer()` | `LongSerializer` + `ByteArraySerializer` (bypasses Schema Registry) | Triggered inside `ConsumerLoop` whenever `SafeStatusMessageDeserializer` catches bad bytes and attaches `dlq-error` and `dlq-raw-payload` headers; forwards raw bytes to `weather-dead-letter`. |
+| **Schema Registry** | Confluent Schema Registry (`:8081`) | Avro over HTTP + Kafka (`_schemas`) | Stores the `StatusMessage` Avro schema (persisted back inside Kafka via `SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=kafka:9092`) so producers and consumers agree on binary layout. |
+
+### Step-by-step walkthrough
+
+1. **Get a safe Station ID on startup**: Before sending weather data, [`StationIdAllocator`](./my_producer/src/main/java/com/weather/my_prod/StationIdAllocator.java) checks `STATION_ID`. If set to a non-negative number, the producer skips Kafka coordination and uses that ID immediately. Otherwise, it creates/verifies `weather-station-ids` (`1` partition, infinite retention, ignoring `TopicExistsException`) and uses **Producer #1** (`acks=all`, `enable.idempotence=true`, retrying up to `5` times with `1s` backoff) to append one marker to partition `0` -> `station_id = offset + 1` (`1, 2, 3, ...`).
+2. **Stream telemetry every second**: [`ProducerLoop`](./my_producer/src/main/java/com/weather/my_prod/ProducerLoop.java) keeps that assigned `station_id` and uses **Producer #2** (`LongSerializer` + `KafkaAvroSerializer` talking to Schema Registry `:8081`) to send one `StatusMessage` per second (`10%` simulated drop) to `weather-stations` with `station_id` as both the record key and payload field.
+3. **Fan-out #1 — Real-time rain alerts**: [`WarningApp`](./my_stream/src/main/java/com/weather/my_stream/WarningApp.java) (`weather-streams`) reads `weather-stations` with `SpecificAvroSerde`, drops null/non-rainy events, transforms readings with `humidity > 70%` into a JSON `RAIN_TRIGGER` payload, and publishes them to `rain-alerts`.
+4. **Fan-out #2 — Central ingestion, backpressure, and DLQ**: [`ConsumerLoop`](./base_central_station/src/main/java/com/weather/consumer/ConsumerLoop.java) (`base-station-group`) reads the same `weather-stations` topic independently using [`SafeStatusMessageDeserializer`](./base_central_station/src/main/java/com/weather/consumer/SafeStatusMessageDeserializer.java):
+   - **If deserialization fails**: Instead of crashing `poll()`, the deserializer attaches `dlq-error` and `dlq-raw-payload` headers and returns `null`, letting **Producer #3** forward the raw payload and error header to `weather-dead-letter`.
+   - **If valid**: `ConsumerLoop` passes the `StatusMessage` to [`Pipeline`](./base_central_station/src/main/java/com/weather/pipeline/Pipeline.java), which reconstructs dropped packets, writes synchronously to **BitCask KV** (`:8080`), and enqueues onto a `10,000`-item `ArrayBlockingQueue` feeding **Parquet -> `parquet_es_indexer` -> Elasticsearch (`:9200`) -> Kibana (`:5601`)**. When the queue reaches 80%, `ConsumerLoop` pauses its partitions until the queue drains to 50%.
+
+---
+
 ## Modules and components
 
 | Module / Component | Stack | Role | Key Files |
@@ -299,6 +338,8 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 ├── parquet_es_indexer/           # Parquet scanner, SHA-256 ledger, mapper, Elasticsearch bulk indexer
 ├── shared_model/                 # StatusMessage.avsc schema and AppConfigs
 ├── docs/
+│   ├── kafka_complete_flow.excalidraw
+│   ├── kafka_complete_flow.svg
 │   ├── monotonic_station_id.excalidraw
 │   ├── monotonic_station_id.svg
 │   └── system_architecture_ref.svg
