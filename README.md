@@ -96,7 +96,7 @@ If you are new to Apache Kafka, think of the **Kafka Broker** (`:9092`, running 
 | **`my_stream`** | Java 21 / Kafka Streams | Filters `humidity > 70%` and emits JSON alerts to `rain-alerts` | [WarningApp.java](./my_stream/src/main/java/com/weather/my_stream/WarningApp.java) |
 | **`base_central_station`** | Java 21 / BitCask + Parquet | Kafka consumer (DLQ + backpressure), gap detector, BitCask KV engine + HTTP `:8080`, Parquet archiver | [Main.java](./base_central_station/src/main/java/com/weather/Main.java), [Pipeline.java](./base_central_station/src/main/java/com/weather/pipeline/Pipeline.java), [BitCaskStore.java](./base_central_station/src/main/java/com/weather/bitcask/engine/BitCaskStore.java), [ParquetArchiver.java](./base_central_station/src/main/java/com/weather/archive/engine/ParquetArchiver.java) |
 | **`parquet_es_indexer`** | Java 21 / ES Java Client | Polls Parquet partitions, tracks SHA-256 file ledger, bulk-indexes Elasticsearch | [IndexerMain.java](./parquet_es_indexer/src/main/java/com/weather/indexer/IndexerMain.java), [ElasticsearchBulkIndexer.java](./parquet_es_indexer/src/main/java/com/weather/indexer/ElasticsearchBulkIndexer.java) |
-| **`bitcask_client.sh`** | Bash / `curl` | CLI client for BitCask HTTP endpoints (`-view-key`, `-view-all`, `-n=<threads>`) | [bitcask_client.sh](./bitcask_client.sh) |
+| **`bitcask_client.sh`** | Bash / `curl` | CLI client and `/view-key` benchmark tool for BitCask HTTP endpoints (`-view-key`, `-view-all`, `-n=<threads>`, `-bench-key`) | [bitcask_client.sh](./bitcask_client.sh) |
 | **Platform services** | Kafka (KRaft), Schema Registry 7.5.0, Elastic 8.18.0 | Broker (`:9092`), schema registry (`:8081`), search (`:9200`), dashboards (`:5601`) | [docker-compose.yml](./docker-compose.yml), [k8s/](./k8s) |
 
 ---
@@ -232,10 +232,21 @@ curl -s "http://localhost:8080/view-all"
 Use [`bitcask_client.sh`](./bitcask_client.sh) to query, export timestamped CSVs, or run concurrent load checks (`API_URL` defaults to `http://localhost:8080` locally and `http://consumer:8080` in Compose):
 
 ```bash
+# Point lookup and full CSV export
 ./bitcask_client.sh -view-key 101
 ./bitcask_client.sh -view-all
+
+# Concurrent /view-all load check (writes N timestamped CSV files)
 ./bitcask_client.sh -n=50
+
+# Concurrent /view-key benchmark (in-memory metrics only; no CSV files written)
+./bitcask_client.sh -bench-key -c=50 -n=1000
+
+# Optional explicit station ID range or list (defaults to live keys from /view-all, fallback 1-10)
+./bitcask_client.sh -bench-key -c=50 -n=1000 -keys=1-10
 ```
+
+`-bench-key` keeps `-c` concurrent `curl` workers sending `GET /view-key?id=<random_station_id>` requests (for `-n` total requests, defaulting to `-c=10 -n=1000`), discards response bodies to `/dev/null` instead of writing per-request CSV files, and prints summary metrics: total requests, HTTP `2xx`/`404`/`5xx` (and connection/other) counts, `requests/sec`, and `P50`/`P95`/`P99` latency in `ms`.
 
 ---
 
