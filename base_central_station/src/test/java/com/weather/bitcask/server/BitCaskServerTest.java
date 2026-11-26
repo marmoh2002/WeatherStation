@@ -17,6 +17,13 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -158,6 +165,57 @@ public class BitCaskServerTest {
         assertEquals(200, viewAll.statusCode());
         assertTrue(viewAll.body().contains("201,"));
         assertUtf8ContentType(viewAll);
+    }
+
+    @Test
+    public void testBoundedExecutorAndConcurrentViewKeyRequests() throws Exception {
+        assertTrue("Expected bounded ThreadPoolExecutor", server.getExecutor() instanceof ThreadPoolExecutor);
+        ThreadPoolExecutor pool = (ThreadPoolExecutor) server.getExecutor();
+        assertTrue("Expected bounded maxPoolSize", pool.getMaximumPoolSize() < Integer.MAX_VALUE);
+        assertTrue("Expected corePoolSize <= maxPoolSize", pool.getCorePoolSize() <= pool.getMaximumPoolSize());
+        BlockingQueue<Runnable> queue = pool.getQueue();
+        int totalCapacity = queue.size() + queue.remainingCapacity();
+        assertTrue("Expected bounded work queue", totalCapacity < Integer.MAX_VALUE);
+        assertTrue("Expected named worker threads",
+                pool.getThreadFactory().newThread(() -> { }).getName().startsWith("bitcask-http-worker-"));
+
+        int totalKeys = 12;
+        for (long key = 1; key <= totalKeys; key++) {
+            store.put(key, makeMessage(key, key * 10L));
+        }
+
+        int clientThreads = 16;
+        int requestsPerThread = 4;
+        ExecutorService clients = Executors.newFixedThreadPool(clientThreads);
+        CountDownLatch startGate = new CountDownLatch(1);
+        CountDownLatch doneGate = new CountDownLatch(clientThreads);
+        ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+
+        for (int t = 0; t < clientThreads; t++) {
+            final int threadIdx = t;
+            clients.submit(() -> {
+                try {
+                    startGate.await();
+                    for (int i = 0; i < requestsPerThread; i++) {
+                        long key = ((threadIdx + i) % totalKeys) + 1L;
+                        HttpResponse<String> resp = get("/view-key?id=" + key);
+                        assertEquals(200, resp.statusCode());
+                        assertTrue("Unexpected body for key " + key + ": " + resp.body(),
+                                resp.body().contains("\"station_id\": " + key));
+                    }
+                } catch (Throwable ex) {
+                    errors.add(ex);
+                } finally {
+                    doneGate.countDown();
+                }
+            });
+        }
+
+        startGate.countDown();
+        assertTrue("Concurrent HTTP requests timed out", doneGate.await(30, TimeUnit.SECONDS));
+        clients.shutdown();
+        assertTrue("Client pool failed to terminate", clients.awaitTermination(5, TimeUnit.SECONDS));
+        assertTrue("Unexpected errors in concurrent /view-key test: " + errors.peek(), errors.isEmpty());
     }
 
     private static void assertUtf8ContentType(HttpResponse<?> response) {

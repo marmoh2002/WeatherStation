@@ -1,24 +1,43 @@
 package com.weather.bitcask.engine;
 
+import com.weather.bitcask.model.DataEntry;
 import com.weather.model.StatusMessage;
 import com.weather.model.WeatherReading;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 
+import java.io.EOFException;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class BitCaskStoreTest {
 
@@ -219,5 +238,166 @@ public class BitCaskStoreTest {
             assertTrue(survivingClosed.isActive() == false);
             assertTrue("Entry in active segment remains readable", store.get(8L).isPresent());
         }
+    }
+
+    @Test
+    public void testConcurrentGetAcrossActiveAndSealedSegments() throws Exception {
+        Path dir = tempDir.newFolder("concurrent-get-store").toPath();
+        int totalKeys = 40;
+        Map<Long, StatusMessage> expected = new HashMap<>();
+
+        try (BitCaskStore store = new BitCaskStore(dir.toString(), 96L)) {
+            for (long key = 1; key <= totalKeys; key++) {
+                StatusMessage msg = makeMessage(key, key * 100L, "BAT_" + key);
+                expected.put(key, msg);
+                store.put(key, msg);
+            }
+            // Overwrite a subset of keys so older versions remain in sealed segments
+            for (long key = 1; key <= 5; key++) {
+                StatusMessage updated = makeMessage(key, key * 1000L + 7L, "UPDATED_" + key);
+                expected.put(key, updated);
+                store.put(key, updated);
+            }
+
+            List<SegmentFile> closedSegments = store.getClosedSegments();
+            assertTrue("Expected multiple sealed segments", closedSegments.size() >= 3);
+
+            long activeSegmentId = store.getCurrentSegmentId();
+            long sealedKeyCount = store.getInMemoryIndex().values().stream()
+                    .filter(dirEntry -> !dirEntry.getSegmentId().equals(activeSegmentId))
+                    .count();
+            long activeKeyCount = store.getInMemoryIndex().values().stream()
+                    .filter(dirEntry -> dirEntry.getSegmentId().equals(activeSegmentId))
+                    .count();
+            assertTrue("Expected entries in sealed segments", sealedKeyCount > 0);
+            assertTrue("Expected entries in active segment", activeKeyCount > 0);
+
+            int threadCount = 16;
+            int readsPerThread = 250;
+            ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+            CountDownLatch startGate = new CountDownLatch(1);
+            CountDownLatch doneGate = new CountDownLatch(threadCount);
+            ConcurrentLinkedQueue<Throwable> errors = new ConcurrentLinkedQueue<>();
+
+            for (int t = 0; t < threadCount; t++) {
+                final int threadIndex = t;
+                pool.submit(() -> {
+                    try {
+                        startGate.await();
+                        for (int i = 0; i < readsPerThread; i++) {
+                            long key = ((threadIndex * 13L + i) % totalKeys) + 1L;
+                            Optional<StatusMessage> retrieved = store.get(key);
+                            if (retrieved.isEmpty()) {
+                                fail("Expected key " + key + " to be present on iteration " + i);
+                            }
+                            StatusMessage actual = retrieved.get();
+                            StatusMessage exp = expected.get(key);
+                            assertEquals("stationId mismatch for key " + key, exp.getStationId(), actual.getStationId());
+                            assertEquals("sNo mismatch for key " + key, exp.getSNo(), actual.getSNo());
+                            assertEquals("batteryStatus mismatch for key " + key,
+                                    exp.getBatteryStatus().toString(), actual.getBatteryStatus().toString());
+                            assertEquals("timestamp mismatch for key " + key,
+                                    exp.getStatusTimestamp(), actual.getStatusTimestamp());
+                            assertEquals("weather mismatch for key " + key, exp.getWeather(), actual.getWeather());
+                        }
+                    } catch (Throwable ex) {
+                        errors.add(ex);
+                    } finally {
+                        doneGate.countDown();
+                    }
+                });
+            }
+
+            startGate.countDown();
+            assertTrue("Concurrent readers timed out", doneGate.await(30, TimeUnit.SECONDS));
+            pool.shutdown();
+            assertTrue("Reader pool failed to terminate", pool.awaitTermination(5, TimeUnit.SECONDS));
+
+            if (!errors.isEmpty()) {
+                Throwable first = errors.peek();
+                throw new AssertionError("Concurrent get() encountered " + errors.size()
+                        + " error(s), first: " + first.getMessage(), first);
+            }
+        }
+    }
+
+    @Test
+    public void testSegmentFilePartialChannelReadsAndEofHandling() throws Exception {
+        byte[] payload = "0123456789ABCDEF".getBytes(StandardCharsets.UTF_8);
+        try (ChunkedReadOnlyFileChannel channel = new ChunkedReadOnlyFileChannel(payload, 3)) {
+            ByteBuffer fullRead = ByteBuffer.allocate(10);
+            SegmentFile.readFully(channel, fullRead, 2);
+            fullRead.flip();
+            byte[] actual = new byte[10];
+            fullRead.get(actual);
+            assertArrayEquals("23456789AB".getBytes(StandardCharsets.UTF_8), actual);
+
+            ByteBuffer pastEof = ByteBuffer.allocate(6);
+            boolean threwEof = false;
+            try {
+                SegmentFile.readFully(channel, pastEof, payload.length - 2);
+            } catch (EOFException expected) {
+                threwEof = true;
+            }
+            assertTrue("Expected EOFException when channel reaches -1 before buffer fills", threwEof);
+        }
+
+        Path segPath = tempDir.newFile("datafile_1.data").toPath();
+        byte[] value = AvroSerializer.serialize(makeMessage(77L, 5L, "OK"));
+        try (SegmentFile segment = new SegmentFile(segPath, true, 1024L)) {
+            long offset = segment.appendEntry(new DataEntry(77L, value));
+            DataEntry entry = segment.readEntry(offset);
+            assertEquals(Long.valueOf(77L), entry.getKey());
+            assertArrayEquals(value, entry.getValue());
+
+            segment.closeReader();
+            boolean threwOnClosedReader = false;
+            try {
+                segment.readEntry(offset);
+            } catch (IOException expected) {
+                threwOnClosedReader = true;
+            }
+            assertTrue("Expected IOException after closeReader()", threwOnClosedReader);
+        }
+    }
+
+    private static final class ChunkedReadOnlyFileChannel extends FileChannel {
+        private final byte[] data;
+        private final int maxChunkBytes;
+
+        private ChunkedReadOnlyFileChannel(byte[] data, int maxChunkBytes) {
+            this.data = data;
+            this.maxChunkBytes = maxChunkBytes;
+        }
+
+        @Override
+        public int read(ByteBuffer dst, long position) {
+            if (position >= data.length) {
+                return -1;
+            }
+            int available = (int) Math.min(data.length - position, Math.min(maxChunkBytes, dst.remaining()));
+            dst.put(data, (int) position, available);
+            return available;
+        }
+
+        @Override
+        protected void implCloseChannel() {
+        }
+
+        @Override public int read(ByteBuffer dst) { throw new UnsupportedOperationException(); }
+        @Override public long read(ByteBuffer[] dsts, int offset, int length) { throw new UnsupportedOperationException(); }
+        @Override public int write(ByteBuffer src) { throw new UnsupportedOperationException(); }
+        @Override public long write(ByteBuffer[] srcs, int offset, int length) { throw new UnsupportedOperationException(); }
+        @Override public long position() { throw new UnsupportedOperationException(); }
+        @Override public FileChannel position(long newPosition) { throw new UnsupportedOperationException(); }
+        @Override public long size() { return data.length; }
+        @Override public FileChannel truncate(long size) { throw new UnsupportedOperationException(); }
+        @Override public void force(boolean metaData) { throw new UnsupportedOperationException(); }
+        @Override public long transferTo(long position, long count, WritableByteChannel target) { throw new UnsupportedOperationException(); }
+        @Override public long transferFrom(ReadableByteChannel src, long position, long count) { throw new UnsupportedOperationException(); }
+        @Override public int write(ByteBuffer src, long position) { throw new UnsupportedOperationException(); }
+        @Override public MappedByteBuffer map(MapMode mode, long position, long size) { throw new UnsupportedOperationException(); }
+        @Override public FileLock lock(long position, long size, boolean shared) { throw new UnsupportedOperationException(); }
+        @Override public FileLock tryLock(long position, long size, boolean shared) { throw new UnsupportedOperationException(); }
     }
 }

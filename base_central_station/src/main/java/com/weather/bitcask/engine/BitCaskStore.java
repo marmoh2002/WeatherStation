@@ -209,7 +209,7 @@ public class BitCaskStore implements Closeable {
             return Optional.empty();
         }
         try {
-            logger.info("Fetching entry for stationId {} from segmentId {} at offset {}", stationId,
+            logger.debug("Fetching entry for stationId {} from segmentId {} at offset {}", stationId,
                     dirEntry.getSegmentId(),
                     dirEntry.getOffset());
             SegmentFile targetSegment = segmentFilesById.get(dirEntry.getSegmentId());

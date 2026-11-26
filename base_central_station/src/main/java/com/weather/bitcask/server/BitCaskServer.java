@@ -16,11 +16,20 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class BitCaskServer {
     private static final Logger logger = LogManager.getLogger(BitCaskServer.class);
+    private static final int MIN_CORE_THREADS = 4;
+    private static final int MIN_MAX_THREADS = 16;
+    private static final int WORKER_QUEUE_CAPACITY = 1024;
+    private static final long KEEP_ALIVE_SECONDS = 60L;
+
     private final BitCaskStore store;
     private HttpServer server;
     private ExecutorService executor;
@@ -31,7 +40,23 @@ public class BitCaskServer {
             this.server = HttpServer.create(new InetSocketAddress(port), 0);
             this.server.createContext("/view-all", new ViewAllHandler());
             this.server.createContext("/view-key", new ViewKeyHandler());
-            this.executor = Executors.newCachedThreadPool();
+            int cpus = Runtime.getRuntime().availableProcessors();
+            int corePoolSize = Math.max(MIN_CORE_THREADS, cpus * 2);
+            int maxPoolSize = Math.max(MIN_MAX_THREADS, cpus * 4);
+            AtomicInteger workerId = new AtomicInteger(1);
+            ThreadFactory threadFactory = runnable -> {
+                Thread thread = new Thread(runnable, "bitcask-http-worker-" + workerId.getAndIncrement());
+                thread.setDaemon(true);
+                return thread;
+            };
+            this.executor = new ThreadPoolExecutor(
+                    corePoolSize,
+                    maxPoolSize,
+                    KEEP_ALIVE_SECONDS,
+                    TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(WORKER_QUEUE_CAPACITY),
+                    threadFactory,
+                    new ThreadPoolExecutor.AbortPolicy());
             this.server.setExecutor(this.executor);
         } catch (IOException e) {
             logger.error("Failed to start HTTP Server", e);
@@ -57,6 +82,10 @@ public class BitCaskServer {
 
     public int getPort() {
         return server != null ? server.getAddress().getPort() : -1;
+    }
+
+    ExecutorService getExecutor() {
+        return executor;
     }
 
     // Handles requests to get ALL keys

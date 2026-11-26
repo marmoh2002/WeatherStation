@@ -213,6 +213,11 @@ kubectl delete -f k8s/
 
 Query parameters are decoded from the raw query string (`&`-delimited pairs split at the first `=`), so extra parameters before or after `id` work and empty/missing values return `400` safely.
 
+`BitCaskServer` dispatches incoming HTTP requests to a bounded `ThreadPoolExecutor` (`corePoolSize = Math.max(4, cpus * 2)`, `maximumPoolSize = Math.max(16, cpus * 4)`, `60s` idle keep-alive, `bitcask-http-worker-*` daemon threads, and `AbortPolicy` overload rejection) backed by a bounded `ArrayBlockingQueue<>(1024)`:
+1. If fewer than `corePoolSize` threads exist, it starts a new thread immediately.
+2. Otherwise, it tries putting the request into the `ArrayBlockingQueue<>(1024)` waiting line.
+3. Only if the queue is completely full does it start extra threads up to `maximumPoolSize` (rejecting excess traffic via `AbortPolicy` once both the queue and `maximumPoolSize` are saturated so excess connections close cleanly instead of stalling the HTTP dispatcher).
+
 ```bash
 # Latest reading for station 101
 curl -s "http://localhost:8080/view-key?id=101"
@@ -236,12 +241,16 @@ Use [`bitcask_client.sh`](./bitcask_client.sh) to query, export timestamped CSVs
 
 ## BitCask storage engine internals
 
-[`BitCaskStore`](./base_central_station/src/main/java/com/weather/bitcask/engine/BitCaskStore.java), [`SegmentFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/SegmentFile.java), [`HintFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/HintFile.java), and [`Compactor`](./base_central_station/src/main/java/com/weather/bitcask/engine/Compactor.java) implement an append-only log-structured key-value store:
+[`BitCaskStore`](./base_central_station/src/main/java/com/weather/bitcask/engine/BitCaskStore.java), [`SegmentFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/SegmentFile.java), [`AvroSerializer`](./base_central_station/src/main/java/com/weather/bitcask/engine/AvroSerializer.java), [`HintFile`](./base_central_station/src/main/java/com/weather/bitcask/engine/HintFile.java), and [`Compactor`](./base_central_station/src/main/java/com/weather/bitcask/engine/Compactor.java) implement an append-only log-structured key-value store:
 
 - **Record layout (`SegmentFile`)**: Each entry writes a 24-byte header (`4B CRC32` + `8B timestamp` + `8B key` + `4B valueSize`) followed by the Avro binary `StatusMessage` payload. `readEntry(offset)` and startup recovery verify CRC32 checksums on read.
+- **Concurrent read hot path (`BitCaskStore.get`, `SegmentFile`, `AvroSerializer`)**:
+  - `SegmentFile.readEntry(offset)` performs lock-free positional reads via `FileChannel.read(ByteBuffer, position)` (looping in `readFully` to handle partial channel reads and throwing `EOFException` on `-1`) instead of `synchronized` `RandomAccessFile.seek()`, allowing parallel reads across active and sealed segments.
+  - `BitCaskStore.get()` logs hit lookups at `DEBUG` (rather than `INFO`) to avoid synchronous `ConsoleAppender` bottlenecks under high-QPS `/view-key` traffic.
+  - `AvroSerializer` reuses per-thread `ThreadLocal` `SpecificDatumWriter`/`SpecificDatumReader`, `BinaryEncoder`/`BinaryDecoder`, and a `ByteArrayOutputStream` buffer (clearing `ENCODER`/`DECODER` on errors) to avoid per-request allocations.
 - **Active segment rotation (`BitCaskStore.put`)**:
   - When `currentOffset >= MAX_SEGMENT_SIZE_KB * 1024`, rotation allocates a strictly monotonic segment ID via `Math.max(Instant.now().toEpochMilli(), currentSegmentId + 1)` so rapid rotations within the same millisecond never collide on `datafile_<id>.data`.
-  - The new active `SegmentFile` is opened before sealing the old segment with `closeWriter()`, which flushes and closes only the `DataOutputStream` writer while keeping the `RandomAccessFile` reader open in `segmentFilesById` for `/view-key` and `store.get()` lookups.
+  - The new active `SegmentFile` is opened before sealing the old segment with `closeWriter()`, which flushes and closes only the `DataOutputStream` writer while keeping the `FileChannel` reader open in `segmentFilesById` for `/view-key` and `store.get()` lookups.
   - A `.hint` file (`key`, `segmentId`, `offset`, `valueSize`) is written best-effort in a `try-with-resources` block; if `.hint` creation fails, the error is logged without leaving `activeSegment` null or closed, and startup recovery (`recoverSegmentsWithoutHints()`) rebuilds missing hint files by scanning `.data` records and truncating any torn tail.
 - **Compaction (`Compactor.compact`)**:
   - Triggered periodically (`COMPACTION_INTERVAL_MINS`, default `3` min) when at least two closed segments exist.
@@ -265,8 +274,8 @@ mvn -pl my_producer,base_central_station test
 
 Test coverage:
 - [`StationIdAllocatorTest`](./my_producer/src/test/java/com/weather/my_prod/StationIdAllocatorTest.java) & [`ProducerLoopTest`](./my_producer/src/test/java/com/weather/my_prod/ProducerLoopTest.java): verify monotonic `1, 2, 3, ...` station ID allocation across sequential/concurrent containers via partition `0`, `STATION_ID` override parsing and bypass behavior, transient topic-creation retries, and `ProducerLoop` emission with the allocated ID.
-- [`BitCaskStoreTest`](./base_central_station/src/test/java/com/weather/bitcask/engine/BitCaskStoreTest.java): verifies `store.get(key)` reads from sealed segments after sub-millisecond rotations with strictly monotonic segment IDs, rotation resilience when `.hint` file creation fails, `Compactor.compact()` merging multiple closed segments while preserving live reads and disk recovery, and clean abort cleanup when a segment read fails before `replaceSegments()`.
-- [`BitCaskServerTest`](./base_central_station/src/test/java/com/weather/bitcask/server/BitCaskServerTest.java): runs an embedded `BitCaskServer` on an ephemeral port and checks `200` responses across active, sealed, and compacted segments (including extra query parameters like `?foo=1&id=101`), `404` for unknown keys, `400` for missing/empty/malformed `id` queries, `405` for non-`GET` methods, `/view-all`, and UTF-8 `Content-Type` headers.
+- [`BitCaskStoreTest`](./base_central_station/src/test/java/com/weather/bitcask/engine/BitCaskStoreTest.java): verifies `store.get(key)` reads from sealed segments after sub-millisecond rotations with strictly monotonic segment IDs, multi-threaded concurrent `get()` calls across active and sealed segments, partial `FileChannel` reads / `EOFException` / `closeReader()` behavior, rotation resilience when `.hint` file creation fails, `Compactor.compact()` merging multiple closed segments while preserving live reads and disk recovery, and clean abort cleanup when a segment read fails before `replaceSegments()`.
+- [`BitCaskServerTest`](./base_central_station/src/test/java/com/weather/bitcask/server/BitCaskServerTest.java): runs an embedded `BitCaskServer` on an ephemeral port and checks `200` responses across active, sealed, and compacted segments (including extra query parameters like `?foo=1&id=101`), bounded `ThreadPoolExecutor` / queue / named-worker configuration under concurrent `/view-key` traffic, `404` for unknown keys, `400` for missing/empty/malformed `id` queries, `405` for non-`GET` methods, `/view-all`, and UTF-8 `Content-Type` headers.
 
 ---
 
@@ -319,7 +328,7 @@ Environment variables read by [AppConfigs.java](./shared_model/src/main/java/com
 │   ├── src/main/java/com/weather/
 │   │   ├── Main.java             # Wires store, archiver, pipeline, compactor, API server, consumer
 │   │   ├── archive/              # ParquetArchiver, PartitionKey, TimeBucketExtractor
-│   │   ├── bitcask/              # BitCaskStore, Compactor, SegmentFile, HintFile, BitCaskServer
+│   │   ├── bitcask/              # BitCaskStore, AvroSerializer, Compactor, SegmentFile, HintFile, BitCaskServer
 │   │   ├── consumer/             # BaseStationConsumer, ConsumerLoop, SafeStatusMessageDeserializer
 │   │   └── pipeline/             # Pipeline (gap synthesis, backpressure, async Parquet queue)
 │   └── src/test/java/com/weather/bitcask/

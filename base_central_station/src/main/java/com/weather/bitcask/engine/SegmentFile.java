@@ -6,8 +6,10 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -22,7 +24,7 @@ public class SegmentFile implements Closeable {
     private final Path filePath;
     private long currentOffset = 0;
     private DataOutputStream writer;
-    private RandomAccessFile reader;
+    private volatile FileChannel readerChannel;
     private boolean isActive = false;
     private final long maxSegmentSizeBytes;
     private static final int FLUSH_THRESHOLD = AppConfigs.getDiskFlushThreshold();
@@ -39,13 +41,13 @@ public class SegmentFile implements Closeable {
         this.filePath = filePath;
         this.maxSegmentSizeBytes = maxSegmentSizeBytes;
         DataOutputStream openedWriter = null;
-        RandomAccessFile openedReader = null;
+        FileChannel openedReaderChannel = null;
         try {
             openedWriter = isActive ? new DataOutputStream(new FileOutputStream(filePath.toFile(), true)) : null; // append
             this.currentOffset = filePath.toFile().length();
-            openedReader = new RandomAccessFile(filePath.toFile(), "r");
+            openedReaderChannel = FileChannel.open(filePath, StandardOpenOption.READ);
             this.writer = openedWriter;
-            this.reader = openedReader;
+            this.readerChannel = openedReaderChannel;
             this.isActive = isActive;
 
         } catch (Exception e) {
@@ -56,9 +58,9 @@ public class SegmentFile implements Closeable {
                     e.addSuppressed(closeEx);
                 }
             }
-            if (openedReader != null) {
+            if (openedReaderChannel != null) {
                 try {
-                    openedReader.close();
+                    openedReaderChannel.close();
                 } catch (IOException closeEx) {
                     e.addSuppressed(closeEx);
                 }
@@ -89,27 +91,48 @@ public class SegmentFile implements Closeable {
     }
 
     public DataEntry readEntry(long offset) throws IOException {
-        synchronized (this) {
-            if (reader == null) {
-                throw new IOException("Segment reader is closed: " + filePath);
-            }
-            reader.seek(offset);
-            int crc = reader.readInt();
-            long timestamp = reader.readLong();
-            long key = reader.readLong();
-            int valueSize = reader.readInt();
-            if (valueSize < 0) {
-                throw new IOException(
-                        "Corrupted record detected at offset " + offset + " (negative valueSize " + valueSize + ")");
-            }
-            byte[] value = new byte[valueSize];
-            reader.readFully(value);
+        if (offset < 0) {
+            throw new IOException("Negative offset: " + offset);
+        }
+        FileChannel channel = this.readerChannel;
+        if (channel == null || !channel.isOpen()) {
+            throw new IOException("Segment reader is closed: " + filePath);
+        }
 
-            DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
-            if (!entry.isValid()) {
-                throw new IOException("Corrupted record detected at offset " + offset + " (CRC32 mismatch)");
+        ByteBuffer headerBuf = ByteBuffer.allocate(HEADER_SIZE);
+        readFully(channel, headerBuf, offset);
+        headerBuf.flip();
+
+        int crc = headerBuf.getInt();
+        long timestamp = headerBuf.getLong();
+        long key = headerBuf.getLong();
+        int valueSize = headerBuf.getInt();
+        if (valueSize < 0) {
+            throw new IOException(
+                    "Corrupted record detected at offset " + offset + " (negative valueSize " + valueSize + ")");
+        }
+
+        byte[] value = new byte[valueSize];
+        readFully(channel, ByteBuffer.wrap(value), offset + HEADER_SIZE);
+
+        DataEntry entry = new DataEntry(Integer.toUnsignedLong(crc), timestamp, key, value);
+        if (!entry.isValid()) {
+            throw new IOException("Corrupted record detected at offset " + offset + " (CRC32 mismatch)");
+        }
+        return entry;
+    }
+
+    static void readFully(FileChannel channel, ByteBuffer buf, long position) throws IOException {
+        long pos = position;
+        while (buf.hasRemaining()) {
+            int bytesRead = channel.read(buf, pos);
+            if (bytesRead == -1) {
+                throw new EOFException("Unexpected EOF reading segment at position " + pos);
             }
-            return entry;
+            if (bytesRead == 0) {
+                throw new IOException("Unexpected zero-byte read from segment at position " + pos);
+            }
+            pos += bytesRead;
         }
     }
 
@@ -195,11 +218,11 @@ public class SegmentFile implements Closeable {
     }
 
     public synchronized void closeReader() throws IOException {
-        if (reader != null) {
+        if (readerChannel != null) {
             try {
-                reader.close();
+                readerChannel.close();
             } finally {
-                reader = null;
+                readerChannel = null;
             }
         }
     }
