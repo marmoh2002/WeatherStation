@@ -48,7 +48,7 @@ Multiple producer containers or Kubernetes replicas (`replicas: 10`) can start c
 
 ---
 
-## Apache Kafka flow (beginner guide)
+## Apache Kafka flow
 
 ![Complete Apache Kafka Flow in WeatherStation](./docs/kafka_complete_flow.svg)
 
